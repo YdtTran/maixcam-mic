@@ -1,0 +1,998 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MaixCAM Monitor</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1118;
+      --bg-2: #0d151e;
+      --panel: #111b26;
+      --panel-2: #152231;
+      --panel-3: #1a2939;
+      --border: #223246;
+      --text: #f4f8fc;
+      --muted: #9eb0c4;
+      --muted-2: #6f8399;
+      --blue: #2f8cff;
+      --blue-2: #0f6fe8;
+      --green: #20d66b;
+      --red: #ff3f4f;
+      --amber: #f6b84b;
+      --shadow: 0 18px 50px rgba(0, 0, 0, .28);
+      --radius: 10px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 65% -10%, rgba(47,140,255,.08), transparent 32%),
+        linear-gradient(180deg, #0b121a 0%, #0a1118 100%);
+      color: var(--text);
+      overflow: hidden;
+    }
+
+    button, input { font: inherit; }
+    button { color: inherit; }
+
+    .app-shell {
+      height: 100vh;
+      display: grid;
+      grid-template-rows: 70px minmax(0, 1fr);
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 0 20px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(12, 20, 29, .96);
+      box-shadow: 0 8px 30px rgba(0,0,0,.14);
+      z-index: 5;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      min-width: 260px;
+      gap: 14px;
+    }
+
+    .brand-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 9px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(145deg, #3b99ff, #0b63d6);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.16), 0 8px 18px rgba(16,111,232,.2);
+    }
+
+    .brand-icon svg { width: 31px; height: 31px; }
+    .brand-title { font-size: 20px; font-weight: 700; letter-spacing: -.2px; }
+    .brand-subtitle { color: var(--muted); font-size: 13px; margin-top: 1px; }
+
+    .topbar-status {
+      display: flex;
+      align-items: center;
+      gap: 22px;
+      margin-left: auto;
+    }
+
+    .server-pill {
+      display: grid;
+      grid-template-columns: 12px auto;
+      gap: 2px 10px;
+      align-items: center;
+      font-size: 12px;
+      color: var(--text);
+    }
+    .server-pill .dot { grid-row: 1 / span 2; }
+    .server-address { color: var(--muted); font-size: 11px; }
+
+    .operator-box {
+      min-height: 50px;
+      padding: 0 12px 0 18px;
+      border-left: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: #e4edf6;
+    }
+
+    .layout {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 295px minmax(720px, 1fr) 315px;
+    }
+
+    .left-sidebar {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      border-right: 1px solid var(--border);
+      background: linear-gradient(180deg, #0e1720, #0b141d);
+    }
+
+    .sidebar-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 16px 10px;
+    }
+    .sidebar-heading h2 { margin: 0; font-size: 16px; font-weight: 650; }
+    .square-btn {
+      width: 36px; height: 36px; border: 1px solid var(--border);
+      border-radius: 7px; background: var(--panel-2); cursor: pointer;
+      display: grid; place-items: center; font-size: 26px; color: #b7c6d6;
+    }
+
+    .camera-list { padding: 0 7px 8px; overflow: auto; }
+    .camera-card {
+      width: 100%;
+      border: 0;
+      border-left: 3px solid transparent;
+      border-radius: 6px;
+      background: transparent;
+      display: grid;
+      grid-template-columns: 80px minmax(0, 1fr) 24px;
+      gap: 10px;
+      padding: 12px 10px;
+      text-align: left;
+      cursor: pointer;
+      margin-bottom: 4px;
+    }
+    .camera-card.active {
+      background: linear-gradient(90deg, rgba(47,140,255,.32), rgba(43,91,143,.42));
+      border-left-color: var(--blue);
+    }
+    .camera-card.disabled { opacity: .68; cursor: default; }
+    .camera-thumb {
+      height: 58px;
+      border-radius: 4px;
+      border: 1px solid #344457;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,0)),
+        repeating-linear-gradient(90deg, #273543 0 11px, #1b2734 11px 22px);
+      display: grid; place-items: center; color: #91a5b9; font-size: 10px;
+      overflow: hidden;
+    }
+    .camera-thumb video { width: 100%; height: 100%; object-fit: cover; }
+    .camera-name { font-size: 15px; font-weight: 700; margin-bottom: 3px; }
+    .camera-state { color: #d8e3ed; font-size: 13px; display: flex; align-items: center; gap: 7px; }
+    .camera-ip { color: var(--muted); margin-top: 5px; font-size: 12px; }
+    .camera-more { color: var(--muted); font-size: 18px; letter-spacing: 1px; align-self: center; }
+
+    .nav-menu { padding: 8px; border-top: 1px solid rgba(34,50,70,.8); }
+    .nav-item {
+      height: 44px;
+      display: flex; align-items: center; gap: 12px;
+      padding: 0 14px; margin: 2px 0; border-radius: 6px;
+      color: #aebed0; font-size: 13px;
+    }
+    .nav-item.active { color: white; background: linear-gradient(90deg,#165eb3,#214c7d); }
+    .nav-icon { width: 20px; text-align: center; font-size: 17px; }
+
+    .main-column {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto 300px;
+      background: #0b131c;
+    }
+
+    .camera-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      padding: 17px 20px 12px;
+    }
+    .camera-title-line { display: flex; align-items: center; gap: 12px; }
+    .camera-title-line h1 { margin: 0; font-size: 24px; font-weight: 650; }
+    .badge {
+      padding: 4px 13px; border-radius: 999px; font-size: 12px;
+      background: rgba(32,214,107,.16); color: #7bf1aa; border: 1px solid rgba(32,214,107,.15);
+    }
+    .badge.offline { background: rgba(255,63,79,.13); color: #ff9099; border-color: rgba(255,63,79,.18); }
+    .camera-meta { margin-top: 5px; color: #c3d0dc; font-size: 13px; display: flex; gap: 0; flex-wrap: wrap; }
+    .camera-meta span + span::before { content: "|"; color: #4a5a6c; margin: 0 10px; }
+    .live-stats { display: flex; gap: 14px; color: #d7e0e9; font-size: 12px; align-items: center; }
+
+    .video-wrap {
+      position: relative;
+      min-height: 0;
+      margin: 0 20px;
+      border-radius: 7px;
+      border: 1px solid #324256;
+      background: #05080c;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+    #liveVideo { width: 100%; height: 100%; display: block; object-fit: contain; background: #05080c; }
+    .video-placeholder {
+      position: absolute; inset: 0; display: grid; place-items: center;
+      background: radial-gradient(circle at center, #162433 0%, #0a1118 58%, #05080c 100%);
+      color: #8194a8; pointer-events: none;
+    }
+    .placeholder-inner { text-align: center; }
+    .placeholder-icon { font-size: 42px; opacity: .65; }
+    .placeholder-title { margin-top: 8px; color: #c6d2de; font-weight: 650; }
+    .placeholder-sub { margin-top: 4px; font-size: 12px; }
+    .video-overlay-top {
+      position: absolute; top: 12px; left: 14px; right: 14px;
+      display: flex; align-items: center; justify-content: space-between; pointer-events: none;
+      font-size: 13px; text-shadow: 0 1px 3px rgba(0,0,0,.9);
+    }
+    .clock-overlay { font-size: 20px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .live-label { background: #db2536; padding: 4px 9px; border-radius: 5px; font-size: 11px; font-weight: 800; }
+    .video-name-overlay {
+      position: absolute; bottom: 12px; left: 14px; font-size: 20px;
+      text-shadow: 0 2px 3px rgba(0,0,0,.9); pointer-events: none;
+    }
+
+    .quick-controls {
+      height: 106px;
+      display: flex; align-items: center; justify-content: center;
+      gap: 30px; padding: 10px 20px; border-bottom: 1px solid var(--border);
+    }
+    .quick-control {
+      min-width: 84px; background: transparent; border: 0; cursor: pointer;
+      display: grid; place-items: center; gap: 7px; color: #eef5fb; font-size: 12px;
+    }
+    .quick-control:disabled { opacity: .42; cursor: not-allowed; }
+    .round-icon {
+      width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center;
+      border: 1px solid #314257; background: linear-gradient(180deg,#273647,#1a2634); font-size: 23px;
+    }
+    .quick-control.record .round-icon { border: 2px solid var(--red); background: transparent; }
+    .record-dot { width: 29px; height: 29px; background: var(--red); border-radius: 50%; }
+
+    .bottom-panel {
+      min-height: 0; display: grid; grid-template-rows: 46px minmax(0,1fr);
+      padding: 0 18px 15px;
+    }
+    .tabs { display: flex; align-items: end; gap: 24px; border-bottom: 1px solid var(--border); }
+    .tab { padding: 0 8px 11px; color: var(--muted); font-size: 13px; }
+    .tab.active { color: #48a0ff; border-bottom: 2px solid #48a0ff; }
+    .recordings-area { min-height: 0; display: grid; grid-template-columns: minmax(0,1fr) 310px; gap: 12px; padding-top: 10px; }
+    .table-wrap { overflow: auto; border: 1px solid var(--border); border-radius: 7px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #1f2d3d; white-space: nowrap; }
+    th { color: #c2cfdb; background: #111b26; font-weight: 600; position: sticky; top: 0; }
+    td { color: #d8e1ea; }
+    tr:last-child td { border-bottom: 0; }
+    .status-completed { color: #35d57c; }
+    .preview-card { min-width: 0; border: 1px solid var(--border); border-radius: 7px; padding: 12px; background: #0f1822; display: grid; align-content: start; gap: 9px; }
+    .preview-box { min-width: 0; aspect-ratio: 16/9; border-radius: 6px; background: linear-gradient(135deg,#213244,#101a24); overflow: hidden; }
+    #recordingPreview { display: block; width: 100%; height: 100%; object-fit: contain; }
+    .preview-title { font-size: 13px; }
+    .preview-meta { color: var(--muted); font-size: 11px; }
+
+    .right-panel {
+      min-height: 0; border-left: 1px solid var(--border); background: #0e1721;
+      overflow: auto; padding: 15px 15px 18px;
+    }
+    .right-tabs { height: 46px; display: grid; grid-template-columns: 1fr 1fr; background: #111c28; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+    .right-tab { display: grid; place-items: center; color: var(--muted); font-size: 13px; border-bottom: 2px solid transparent; }
+    .right-tab.active { color: #51a5ff; background: #142438; border-bottom-color: #2f8cff; }
+    .control-section { border: 1px solid var(--border); border-radius: 8px; background: linear-gradient(180deg,#111b26,#0f1822); margin-top: 10px; overflow: hidden; }
+    .section-block { padding: 15px; border-bottom: 1px solid var(--border); }
+    .section-block:last-child { border-bottom: 0; }
+    .section-title { font-size: 14px; font-weight: 650; display: flex; align-items: center; gap: 10px; margin-bottom: 13px; }
+    .row { display: flex; align-items: center; gap: 10px; }
+    .grow { flex: 1; }
+    .slider { width: 100%; accent-color: var(--blue); }
+    .value-label { min-width: 38px; text-align: right; color: #c9d5e0; font-size: 12px; }
+    .meter { display: grid; grid-template-columns: repeat(16, 1fr); gap: 2px; margin-top: 10px; }
+    .meter span { height: 9px; border-radius: 1px; background: #344354; }
+    .meter span.active { background: #20d66b; }
+    .full-btn {
+      width: 100%; min-height: 42px; border-radius: 6px; border: 1px solid transparent;
+      background: linear-gradient(180deg,#3393ff,#1477e8); cursor: pointer; font-weight: 650;
+    }
+    .full-btn.secondary { background: #1a2837; border-color: #2a3b4e; color: #c2d0dd; }
+    .full-btn.danger { background: linear-gradient(180deg,#ff4054,#eb243b); }
+    .full-btn:disabled { opacity: .42; cursor: not-allowed; }
+    .hint { color: var(--muted); font-size: 11px; text-align: center; margin-top: 8px; }
+    .record-info { display: grid; grid-template-columns: 82px 1fr; gap: 8px; color: #c3ced9; font-size: 12px; margin-bottom: 14px; }
+    .record-info .label { color: var(--muted); }
+    .settings-box { margin-top: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 7px; background: #0c141d; }
+    .settings-box label { display: block; color: var(--muted); font-size: 11px; margin-bottom: 6px; }
+    .settings-box input {
+      width: 100%; border: 1px solid #2a3b4e; background: #091019; color: #dce6f0;
+      border-radius: 5px; padding: 9px 10px; font-size: 12px; outline: none;
+    }
+    .settings-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 9px; }
+    .mini-btn { padding: 8px; border: 1px solid #2b3d50; background: #172432; border-radius: 5px; cursor: pointer; font-size: 11px; }
+    .mini-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #657a8f; box-shadow: 0 0 0 2px rgba(101,122,143,.11); display: inline-block; }
+    .dot.green { background: var(--green); }
+    .dot.red { background: var(--red); }
+    .dot.amber { background: var(--amber); }
+
+    .toast {
+      position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 20px);
+      opacity: 0; pointer-events: none; background: #172433; border: 1px solid #31465c;
+      border-radius: 8px; padding: 10px 14px; color: #d9e6f2; font-size: 12px;
+      box-shadow: 0 12px 35px rgba(0,0,0,.35); transition: .2s ease; z-index: 20;
+    }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+    details.debug { margin-top: 10px; }
+    details.debug summary { cursor: pointer; color: #8fa4b9; font-size: 11px; }
+    #log { max-height: 150px; overflow: auto; white-space: pre-wrap; background: #081018; border: 1px solid #1d2b3a; border-radius: 6px; padding: 9px; color: #9fb2c6; font: 10px/1.45 Consolas, monospace; }
+
+    @media (max-width: 1250px) {
+      .layout { grid-template-columns: 245px minmax(620px,1fr) 285px; }
+      .recordings-area { grid-template-columns: 1fr; }
+      .preview-card { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none">
+            <rect x="5" y="6" width="22" height="16" rx="2.5" stroke="white" stroke-width="1.8"/>
+            <circle cx="16" cy="14" r="4" stroke="white" stroke-width="1.8"/>
+            <path d="M11 26h10M14 22v4M18 22v4" stroke="white" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div>
+          <div class="brand-title">MaixCAM Monitor</div>
+          <div class="brand-subtitle">Real-time Audio-Video Monitoring</div>
+        </div>
+      </div>
+
+      <div class="topbar-status">
+        <div class="server-pill">
+          <span id="serverDot" class="dot red"></span>
+          <span id="serverText">Server Disconnected</span>
+          <span class="server-address" id="relayAddress"></span>
+        </div>
+        <div class="operator-box"><span style="font-size:22px">♟</span><span>Operator</span><span style="color:#899bae">⌄</span></div>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="left-sidebar">
+        <div class="sidebar-heading"><h2>Cameras (4)</h2><button class="square-btn" title="Add camera (future)">＋</button></div>
+        <div class="camera-list">
+          <button class="camera-card active" type="button">
+            <div class="camera-thumb"><span>LIVE</span></div>
+            <div>
+              <div class="camera-name">CAM-01</div>
+              <div class="camera-state"><span id="camListDot" class="dot red"></span><span id="camListState">Offline</span></div>
+              <div class="camera-ip">maix01 · MediaMTX</div>
+            </div>
+            <div class="camera-more">•••</div>
+          </button>
+          <button class="camera-card disabled" type="button" disabled>
+            <div class="camera-thumb">CAM-02</div><div><div class="camera-name">CAM-02</div><div class="camera-state"><span class="dot"></span>Not configured</div><div class="camera-ip">—</div></div><div class="camera-more">•••</div>
+          </button>
+          <button class="camera-card disabled" type="button" disabled>
+            <div class="camera-thumb">CAM-03</div><div><div class="camera-name">CAM-03</div><div class="camera-state"><span class="dot"></span>Not configured</div><div class="camera-ip">—</div></div><div class="camera-more">•••</div>
+          </button>
+          <button class="camera-card disabled" type="button" disabled>
+            <div class="camera-thumb">CAM-04</div><div><div class="camera-name">CAM-04</div><div class="camera-state"><span class="dot"></span>Not configured</div><div class="camera-ip">—</div></div><div class="camera-more">•••</div>
+          </button>
+        </div>
+        <nav class="nav-menu">
+          <div class="nav-item active"><span class="nav-icon">▣</span>Live View</div>
+          <div class="nav-item"><span class="nav-icon">▤</span>Recordings</div>
+          <div class="nav-item"><span class="nav-icon">⚙</span>Settings</div>
+          <div class="nav-item"><span class="nav-icon">●</span>About</div>
+        </nav>
+      </aside>
+
+      <main class="main-column">
+        <div class="camera-header">
+          <div>
+            <div class="camera-title-line"><h1>CAM-01</h1><span id="cameraBadge" class="badge offline">Offline</span></div>
+            <div class="camera-meta"><span>MaixCAM</span><span id="resolutionText">-- × --</span><span>H.264 / Opus</span><span id="fpsText">-- FPS</span></div>
+          </div>
+          <div class="live-stats"><span id="headerDot" class="dot red"></span><span id="latencyText">Network RTT: -- ms</span><span title="Single WHEP A/V">1× WHEP</span></div>
+        </div>
+
+        <section class="video-wrap" id="videoWrap">
+          <video id="liveVideo" autoplay playsinline></video>
+          <div id="videoPlaceholder" class="video-placeholder">
+            <div class="placeholder-inner"><div class="placeholder-icon">▣</div><div class="placeholder-title">CAM-01 is disconnected</div><div class="placeholder-sub">Click Connect in Camera Control to start one WHEP A/V session.</div></div>
+          </div>
+          <div class="video-overlay-top"><span id="clockOverlay" class="clock-overlay">----</span><span id="liveLabel" class="live-label" style="display:none">LIVE</span></div>
+          <div class="video-name-overlay">CAM-01</div>
+        </section>
+
+        <div class="quick-controls">
+          <button id="muteBtn" class="quick-control" type="button" disabled><span class="round-icon">🔊</span><span>Mute</span></button>
+          <button id="quickTalkBtn" class="quick-control" type="button" disabled><span class="round-icon">🎙</span><span>Hold to Talk</span></button>
+          <button id="quickRecordBtn" class="quick-control record" type="button"><span class="round-icon"><span class="record-dot"></span></span><span>Start Recording</span></button>
+          <button id="snapshotBtn" class="quick-control" type="button" disabled><span class="round-icon">▣</span><span>Snapshot</span></button>
+          <button class="quick-control" type="button" disabled title="Multi-camera layout comes in a later phase"><span class="round-icon">▦</span><span>Layout</span></button>
+          <button id="fullscreenBtn" class="quick-control" type="button" disabled><span class="round-icon">⛶</span><span>Fullscreen</span></button>
+        </div>
+
+        <section class="bottom-panel">
+          <div class="tabs"><div class="tab active">Recent Recordings</div><div class="tab">Playback</div></div>
+          <div class="recordings-area">
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>#</th><th>Camera</th><th>Start Time</th><th>Duration</th><th>File Size</th><th>Status</th><th>Actions</th></tr></thead>
+                <tbody id="recordingsBody"><tr><td colspan="7">Loading recordings…</td></tr></tbody>
+              </table>
+            </div>
+            <aside class="preview-card"><strong>Preview</strong><div class="preview-box"><video id="recordingPreview" controls playsinline></video></div><div class="preview-title">CAM-01</div><div id="previewMeta" class="preview-meta">Select a completed recording.</div><button id="playRecordingBtn" class="full-btn secondary" disabled>▶ Play Recording</button></aside>
+          </div>
+        </section>
+      </main>
+
+      <aside class="right-panel">
+        <div class="right-tabs"><div class="right-tab active">Control</div><div class="right-tab">Info</div></div>
+        <div class="control-section">
+          <div class="section-block">
+            <div class="section-title">🔊 Audio</div>
+            <div class="row"><span id="audioIcon">🔊</span><input id="volumeSlider" class="slider grow" type="range" min="0" max="100" value="80" disabled /><span id="volumeValue" class="value-label">80%</span></div>
+            <div class="meter" aria-hidden="true">
+              <span class="active"></span><span class="active"></span><span class="active"></span><span class="active"></span><span class="active"></span><span class="active"></span><span class="active"></span><span class="active"></span><span class="active"></span><span class="active"></span><span></span><span></span><span></span><span></span><span></span><span></span>
+            </div>
+          </div>
+          <div class="section-block">
+            <div class="section-title">🎙 Talkback</div>
+            <button id="talkBtn" class="full-btn" type="button" disabled>🎙 &nbsp; Hold to Talk</button>
+            <div id="talkHint" class="hint">Checking MaixCAM talkback…</div>
+          </div>
+          <div class="section-block">
+            <div class="section-title"><span class="dot red"></span> Recording</div>
+            <div class="record-info"><span class="label">Status</span><span id="recordStatus">Not recording</span><span class="label">Duration</span><span id="recordDuration">—</span><span class="label">File Size</span><span id="recordSize">—</span><span class="label">Storage Path</span><span id="recordPath">—</span></div>
+            <button id="recordBtn" class="full-btn danger" type="button">● &nbsp; Start Recording</button>
+            <div class="hint">MP4 recordings are saved on this PC.</div>
+          </div>
+          <div class="section-block">
+            <div class="section-title">▣ Camera Control</div>
+            <div class="settings-box">
+              <label for="whepUrl">WHEP endpoint</label>
+              <input id="whepUrl" spellcheck="false" />
+              <div class="settings-actions">
+                <button id="connectBtn" class="mini-btn" type="button">Connect</button>
+                <button id="disconnectBtn" class="mini-btn" type="button" disabled>Disconnect</button>
+              </div>
+            </div>
+            <details class="debug">
+              <summary>Connection debug log</summary>
+              <pre id="log"></pre>
+            </details>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <canvas id="snapshotCanvas" hidden></canvas>
+  <div id="toast" class="toast" role="status"></div>
+
+  <script>
+    "use strict";
+
+    const liveVideo = document.getElementById("liveVideo");
+    const videoWrap = document.getElementById("videoWrap");
+    const videoPlaceholder = document.getElementById("videoPlaceholder");
+    const whepUrlInput = document.getElementById("whepUrl");
+    const relayAddress = `${window.location.hostname}:8889`;
+    document.getElementById("relayAddress").textContent = relayAddress;
+    whepUrlInput.value = `http://${relayAddress}/maix01/whep`;
+    const connectBtn = document.getElementById("connectBtn");
+    const disconnectBtn = document.getElementById("disconnectBtn");
+    const muteBtn = document.getElementById("muteBtn");
+    const volumeSlider = document.getElementById("volumeSlider");
+    const volumeValue = document.getElementById("volumeValue");
+    const snapshotBtn = document.getElementById("snapshotBtn");
+    const fullscreenBtn = document.getElementById("fullscreenBtn");
+    const cameraBadge = document.getElementById("cameraBadge");
+    const headerDot = document.getElementById("headerDot");
+    const camListDot = document.getElementById("camListDot");
+    const camListState = document.getElementById("camListState");
+    const serverDot = document.getElementById("serverDot");
+    const serverText = document.getElementById("serverText");
+    const latencyText = document.getElementById("latencyText");
+    const resolutionText = document.getElementById("resolutionText");
+    const fpsText = document.getElementById("fpsText");
+    const liveLabel = document.getElementById("liveLabel");
+    const clockOverlay = document.getElementById("clockOverlay");
+    const logElement = document.getElementById("log");
+    const toast = document.getElementById("toast");
+    const snapshotCanvas = document.getElementById("snapshotCanvas");
+    const recordButtons = [document.getElementById("quickRecordBtn"), document.getElementById("recordBtn")];
+    const recordingsBody = document.getElementById("recordingsBody");
+    const recordingPreview = document.getElementById("recordingPreview");
+    const playRecordingBtn = document.getElementById("playRecordingBtn");
+    const talkButtons = [document.getElementById("quickTalkBtn"), document.getElementById("talkBtn")];
+    const talkHint = document.getElementById("talkHint");
+    let talkbackAvailable = false;
+    let talkbackWanted = false;
+    let talkbackGeneration = 0;
+    let talkbackStream = null;
+    let talkbackContext = null;
+    let talkbackSource = null;
+    let talkbackProcessor = null;
+    let talkbackSending = false;
+    let talkbackPending = Promise.resolve();
+
+    function showTalkbackState(active) {
+      talkButtons.forEach((button) => {
+        button.disabled = !talkbackAvailable;
+        if (button === document.getElementById("talkBtn")) button.textContent = active ? "🎙 Speaking… release to stop" : "🎙  Hold to Talk";
+        else button.querySelector("span:last-child").textContent = active ? "Speaking…" : "Hold to Talk";
+      });
+      talkHint.textContent = active ? "PC microphone → Air6 HS on MaixCAM" :
+        talkbackAvailable ? "Hold while speaking; release to stop." : "Talkback receiver is unavailable.";
+    }
+
+    async function refreshTalkback() {
+      try {
+        const response = await fetch("/api/talkback/status");
+        talkbackAvailable = (await response.json()).available === true;
+      } catch { talkbackAvailable = false; }
+      showTalkbackState(talkbackStream !== null);
+    }
+
+    async function startTalkback(event) {
+      if (!talkbackAvailable || talkbackWanted) return;
+      event.preventDefault();
+      talkbackWanted = true;
+      const generation = ++talkbackGeneration;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
+        if (!talkbackWanted || generation !== talkbackGeneration) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        const context = new AudioContext();
+        await context.resume();
+        const source = context.createMediaStreamSource(stream);
+        const processor = context.createScriptProcessor(2048, 1, 1);
+        processor.onaudioprocess = (audioEvent) => {
+          if (!talkbackWanted || talkbackSending) return;
+          const input = audioEvent.inputBuffer.getChannelData(0);
+          const outputLength = Math.round(input.length * 48000 / context.sampleRate);
+          const pcm = new Int16Array(outputLength);
+          for (let index = 0; index < outputLength; index++) {
+            const sourceIndex = Math.min(input.length - 1, Math.floor(index * context.sampleRate / 48000));
+            const sample = Math.max(-1, Math.min(1, input[sourceIndex]));
+            pcm[index] = sample < 0 ? sample * 32768 : sample * 32767;
+          }
+          talkbackSending = true;
+          talkbackPending = fetch("/api/talkback/audio", {
+            method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: pcm.buffer,
+          }).then((response) => {
+            if (!response.ok) throw new Error(`Talkback HTTP ${response.status}`);
+          }).catch((error) => log(`talkback error: ${error.message}`)).finally(() => { talkbackSending = false; });
+        };
+        source.connect(processor);
+        processor.connect(context.destination);
+        talkbackStream = stream;
+        talkbackContext = context;
+        talkbackSource = source;
+        talkbackProcessor = processor;
+        showTalkbackState(true);
+      } catch (error) {
+        talkbackWanted = false;
+        showToast(`Microphone: ${error.message}`);
+      }
+    }
+
+    async function stopTalkback() {
+      if (!talkbackWanted && !talkbackStream) return;
+      talkbackWanted = false;
+      ++talkbackGeneration;
+      if (talkbackProcessor) { talkbackProcessor.disconnect(); talkbackProcessor.onaudioprocess = null; }
+      if (talkbackSource) talkbackSource.disconnect();
+      if (talkbackStream) talkbackStream.getTracks().forEach((track) => track.stop());
+      if (talkbackContext) await talkbackContext.close();
+      talkbackProcessor = talkbackSource = talkbackStream = talkbackContext = null;
+      showTalkbackState(false);
+      await talkbackPending;
+      fetch("/api/talkback/stop", { method: "POST" }).catch((error) => log(`talkback stop error: ${error.message}`));
+    }
+
+    talkButtons.forEach((button) => {
+      button.addEventListener("pointerdown", startTalkback);
+      button.addEventListener("pointerup", stopTalkback);
+      button.addEventListener("pointercancel", stopTalkback);
+      button.addEventListener("pointerleave", stopTalkback);
+      button.addEventListener("keydown", (event) => { if (event.key === " " || event.key === "Enter") startTalkback(event); });
+      button.addEventListener("keyup", (event) => { if (event.key === " " || event.key === "Enter") stopTalkback(); });
+    });
+    window.addEventListener("blur", stopTalkback);
+    refreshTalkback();
+    let recordingActive = false;
+    let recordingBusy = false;
+
+    const formatBytes = (size) => size >= 1048576 ? `${(size / 1048576).toFixed(1)} MB` : `${(size / 1024).toFixed(0)} KB`;
+    const formatDuration = (seconds) => `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+
+    async function recordingRequest(path, method = "GET") {
+      const response = await fetch(path, { method });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || `Recording API HTTP ${response.status}`);
+      return payload;
+    }
+
+    function showRecordingStatus(status) {
+      recordingActive = status.recording;
+      document.getElementById("recordStatus").textContent = status.recording ? "Recording" : "Not recording";
+      document.getElementById("recordDuration").textContent = status.recording ? formatDuration(status.duration_seconds) : "—";
+      document.getElementById("recordSize").textContent = status.recording ? formatBytes(status.size_bytes) : "—";
+      document.getElementById("recordPath").textContent = status.path || "—";
+      recordButtons.forEach((button) => {
+        button.disabled = recordingBusy;
+        button.querySelector(":scope > span:last-child")?.replaceChildren(document.createTextNode(status.recording ? "Stop Recording" : "Start Recording"));
+        if (button === document.getElementById("recordBtn")) button.textContent = status.recording ? "■  Stop Recording" : "●  Start Recording";
+      });
+    }
+
+    async function refreshRecordings() {
+      const [status, items] = await Promise.all([
+        recordingRequest("/api/recordings/status"), recordingRequest("/api/recordings"),
+      ]);
+      showRecordingStatus(status);
+      recordingsBody.replaceChildren();
+      if (!items.length) {
+        const row = recordingsBody.insertRow();
+        const cell = row.insertCell();
+        cell.colSpan = 7;
+        cell.textContent = "No recordings yet";
+      }
+      items.forEach((item, index) => {
+        const row = recordingsBody.insertRow();
+        [String(index + 1), "CAM-01", new Date(item.created_at).toLocaleString(),
+          item.active ? formatDuration(status.duration_seconds) : item.duration_seconds ? formatDuration(item.duration_seconds) : "—", formatBytes(item.size_bytes),
+          item.active ? "Recording" : "Ready"].forEach((value) => { row.insertCell().textContent = value; });
+        const action = document.createElement("button");
+        action.type = "button";
+        action.textContent = "Play";
+        action.disabled = item.active;
+        action.addEventListener("click", () => {
+          recordingPreview.src = item.url;
+          document.getElementById("previewMeta").textContent = `${new Date(item.created_at).toLocaleString()} · ${formatBytes(item.size_bytes)}`;
+          playRecordingBtn.disabled = false;
+          recordingPreview.play().catch((error) => showToast(error.message));
+        });
+        row.insertCell().append(action);
+      });
+    }
+
+    async function toggleRecording() {
+      if (recordingBusy) return;
+      recordingBusy = true;
+      recordButtons.forEach((button) => { button.disabled = true; });
+      try {
+        const next = await recordingRequest(recordingActive ? "/api/recordings/stop" : "/api/recordings/start", "POST");
+        showRecordingStatus(next);
+        await refreshRecordings();
+        showToast(recordingActive ? "Recording started." : "Recording saved.");
+      } catch (error) {
+        showToast(error.message);
+        log(`recording error: ${error.message}`);
+      } finally {
+        recordingBusy = false;
+        recordButtons.forEach((button) => { button.disabled = false; });
+      }
+    }
+
+    recordButtons.forEach((button) => button.addEventListener("click", toggleRecording));
+    playRecordingBtn.addEventListener("click", () => recordingPreview.play().catch((error) => showToast(error.message)));
+    refreshRecordings().catch((error) => log(`recording API unavailable: ${error.message}`));
+    setInterval(() => refreshRecordings().catch((error) => log(`recording API unavailable: ${error.message}`)), 3000);
+
+    liveVideo.volume = 0.8;
+
+    function log(message) {
+      const stamp = new Date().toLocaleTimeString();
+      logElement.textContent += `[${stamp}] ${message}\n`;
+      logElement.scrollTop = logElement.scrollHeight;
+      console.log(message);
+    }
+
+    let toastTimer = null;
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove("show"), 2400);
+    }
+
+    function updateClock() {
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, "0");
+      clockOverlay.textContent = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}  ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+    }
+    updateClock();
+    setInterval(updateClock, 1000);
+
+    function waitForIceGatheringComplete(pc, timeoutMs = 5000) {
+      if (pc.iceGatheringState === "complete") return Promise.resolve();
+      return new Promise((resolve) => {
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          pc.removeEventListener("icegatheringstatechange", onChange);
+          resolve();
+        };
+        const onChange = () => pc.iceGatheringState === "complete" && finish();
+        const timer = setTimeout(() => {
+          log(`ICE gathering timed out after ${timeoutMs} ms; continuing.`);
+          finish();
+        }, timeoutMs);
+        pc.addEventListener("icegatheringstatechange", onChange);
+      });
+    }
+
+    function setConnectionUi(state, detail = "") {
+      const connected = state === "connected";
+      const connecting = state === "connecting";
+      const failed = state === "failed";
+
+      cameraBadge.textContent = connected ? "Online" : connecting ? "Connecting" : failed ? "Error" : "Offline";
+      cameraBadge.classList.toggle("offline", !connected);
+      headerDot.className = `dot ${connected ? "green" : connecting ? "amber" : "red"}`;
+      camListDot.className = `dot ${connected ? "green" : connecting ? "amber" : "red"}`;
+      camListState.textContent = connected ? "Online" : connecting ? "Connecting" : failed ? "Error" : "Offline";
+      serverDot.className = `dot ${connected ? "green" : connecting ? "amber" : "red"}`;
+      serverText.textContent = connected ? "Server Connected" : connecting ? "Connecting to Server" : "Server Disconnected";
+      liveLabel.style.display = connected ? "inline-block" : "none";
+      videoPlaceholder.style.display = connected ? "none" : "grid";
+
+      connectBtn.disabled = connected || connecting;
+      disconnectBtn.disabled = !connected && !connecting;
+      whepUrlInput.disabled = connected || connecting;
+      muteBtn.disabled = !connected;
+      volumeSlider.disabled = !connected;
+      snapshotBtn.disabled = !connected;
+      fullscreenBtn.disabled = !connected;
+
+      if (detail) log(`state=${state}: ${detail}`);
+    }
+
+    class WhepAvReader {
+      constructor() {
+        this.pc = null;
+        this.sessionUrl = null;
+        this.mediaStream = null;
+        this.statsTimer = null;
+        this.lastVideoBytes = null;
+        this.lastVideoTimestamp = null;
+        this.connectToken = 0;
+      }
+
+      async start(url) {
+        await this.stop({ silent: true });
+        const token = ++this.connectToken;
+        setConnectionUi("connecting", `connecting to ${url}`);
+
+        const pc = new RTCPeerConnection({ bundlePolicy: "max-bundle" });
+        const mediaStream = new MediaStream();
+        this.pc = pc;
+        this.mediaStream = mediaStream;
+        liveVideo.srcObject = mediaStream;
+
+        pc.addTransceiver("video", { direction: "recvonly" });
+        pc.addTransceiver("audio", { direction: "recvonly" });
+
+        pc.addEventListener("track", (event) => {
+          if (this.pc !== pc) return;
+          if (!mediaStream.getTracks().some((track) => track.id === event.track.id)) {
+            mediaStream.addTrack(event.track);
+          }
+          log(`received ${event.track.kind} track (${event.track.id})`);
+          if (event.track.kind === "video") {
+            event.track.addEventListener("unmute", () => log("video track unmuted"), { once: true });
+          }
+          liveVideo.play().catch((error) => {
+            log(`autoplay blocked: ${error.message}`);
+            showToast("Click Mute/Unmute once if the browser blocks audio autoplay.");
+          });
+        });
+
+        pc.addEventListener("connectionstatechange", () => {
+          if (this.pc !== pc) return;
+          log(`connectionState=${pc.connectionState}`);
+          if (pc.connectionState === "connected") {
+            setConnectionUi("connected");
+            this.startStats();
+          } else if (["new", "connecting"].includes(pc.connectionState)) {
+            setConnectionUi("connecting");
+          } else if (["failed", "disconnected"].includes(pc.connectionState)) {
+            setConnectionUi("failed", `WebRTC ${pc.connectionState}`);
+          } else if (pc.connectionState === "closed") {
+            setConnectionUi("idle");
+          }
+        });
+
+        pc.addEventListener("iceconnectionstatechange", () => log(`iceConnectionState=${pc.iceConnectionState}`));
+
+        try {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          await waitForIceGatheringComplete(pc);
+
+          if (this.pc !== pc || token !== this.connectToken || pc.signalingState === "closed") {
+            throw new Error("Connection stopped before WHEP signaling completed.");
+          }
+
+          const sdp = pc.localDescription.sdp;
+          const mediaSections = ["video", "audio"].filter((kind) => sdp.includes(`m=${kind}`));
+          log(`SDP offer media: ${mediaSections.join(" + ")}`);
+
+          const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/sdp", "Accept": "application/sdp" },
+            body: sdp,
+          });
+          const answerSdp = await response.text();
+          if (!response.ok) throw new Error(`WHEP POST failed: HTTP ${response.status} ${response.statusText} - ${answerSdp}`);
+          if (!answerSdp.trim()) throw new Error("MediaMTX returned an empty SDP answer.");
+
+          const location = response.headers.get("Location");
+          if (location) {
+            this.sessionUrl = new URL(location, url).toString();
+            log(`WHEP session=${this.sessionUrl}`);
+          } else {
+            log("WHEP response has no Location header; DELETE-on-stop will be skipped.");
+          }
+
+          await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
+          log("Remote SDP answer applied. Waiting for A/V tracks...");
+        } catch (error) {
+          if (this.pc === pc) {
+            setConnectionUi("failed", error.message);
+            pc.close();
+            this.pc = null;
+            this.mediaStream = null;
+            liveVideo.srcObject = null;
+          }
+          throw error;
+        }
+      }
+
+      async stop({ silent = false } = {}) {
+        this.connectToken += 1;
+        this.stopStats();
+        const pc = this.pc;
+        const sessionUrl = this.sessionUrl;
+        this.pc = null;
+        this.sessionUrl = null;
+
+        if (pc && pc.signalingState !== "closed") pc.close();
+        if (this.mediaStream) this.mediaStream.getTracks().forEach((track) => track.stop());
+        this.mediaStream = null;
+        liveVideo.pause();
+        liveVideo.srcObject = null;
+
+        if (sessionUrl) {
+          try {
+            await fetch(sessionUrl, { method: "DELETE" });
+            log("WHEP session deleted.");
+          } catch (error) {
+            log(`WHEP DELETE failed (${error.message}); peer is already closed.`);
+          }
+        }
+
+        resolutionText.textContent = "-- × --";
+        fpsText.textContent = "-- FPS";
+        latencyText.textContent = "Network RTT: -- ms";
+        setConnectionUi("idle");
+        if (!silent) log("Disconnected.");
+      }
+
+      startStats() {
+        this.stopStats();
+        this.statsTimer = setInterval(() => this.updateStats(), 1000);
+        this.updateStats();
+      }
+
+      stopStats() {
+        if (this.statsTimer) clearInterval(this.statsTimer);
+        this.statsTimer = null;
+        this.lastVideoBytes = null;
+        this.lastVideoTimestamp = null;
+      }
+
+      async updateStats() {
+        const pc = this.pc;
+        if (!pc || pc.connectionState !== "connected") return;
+        try {
+          const reports = await pc.getStats();
+          let rttMs = null;
+          let fps = null;
+          reports.forEach((report) => {
+            if (report.type === "candidate-pair" && report.state === "succeeded" && report.currentRoundTripTime != null) {
+              rttMs = Math.round(report.currentRoundTripTime * 1000);
+            }
+            if (report.type === "inbound-rtp" && report.kind === "video" && !report.isRemote) {
+              if (report.framesPerSecond != null) fps = Math.round(report.framesPerSecond);
+            }
+          });
+          latencyText.textContent = `Network RTT: ${rttMs == null ? "--" : rttMs} ms`;
+          fpsText.textContent = `${fps == null ? "--" : fps} FPS`;
+        } catch (error) {
+          log(`stats error: ${error.message}`);
+        }
+      }
+    }
+
+    const reader = new WhepAvReader();
+
+    connectBtn.addEventListener("click", async () => {
+      const url = whepUrlInput.value.trim();
+      if (!url) return showToast("Enter a WHEP endpoint first.");
+      try { await reader.start(url); }
+      catch (error) { log(`ERROR: ${error.stack || error.message}`); showToast(error.message); }
+    });
+
+    disconnectBtn.addEventListener("click", () => reader.stop());
+
+    volumeSlider.addEventListener("input", () => {
+      const volume = Number(volumeSlider.value) / 100;
+      liveVideo.volume = volume;
+      if (volume > 0 && liveVideo.muted) liveVideo.muted = false;
+      volumeValue.textContent = `${volumeSlider.value}%`;
+      muteBtn.querySelector("span:last-child").textContent = liveVideo.muted || volume === 0 ? "Unmute" : "Mute";
+      muteBtn.querySelector(".round-icon").textContent = liveVideo.muted || volume === 0 ? "🔇" : "🔊";
+    });
+
+    muteBtn.addEventListener("click", () => {
+      liveVideo.muted = !liveVideo.muted;
+      muteBtn.querySelector("span:last-child").textContent = liveVideo.muted ? "Unmute" : "Mute";
+      muteBtn.querySelector(".round-icon").textContent = liveVideo.muted ? "🔇" : "🔊";
+      liveVideo.play().catch((error) => log(`play after mute toggle failed: ${error.message}`));
+    });
+
+    liveVideo.addEventListener("loadedmetadata", () => {
+      resolutionText.textContent = `${liveVideo.videoWidth || "--"} × ${liveVideo.videoHeight || "--"}`;
+    });
+
+    fullscreenBtn.addEventListener("click", async () => {
+      try {
+        if (!document.fullscreenElement) await videoWrap.requestFullscreen();
+        else await document.exitFullscreen();
+      } catch (error) { showToast(`Fullscreen failed: ${error.message}`); }
+    });
+
+    snapshotBtn.addEventListener("click", () => {
+      if (!liveVideo.videoWidth || !liveVideo.videoHeight) return showToast("No decoded video frame yet.");
+      snapshotCanvas.width = liveVideo.videoWidth;
+      snapshotCanvas.height = liveVideo.videoHeight;
+      const ctx = snapshotCanvas.getContext("2d");
+      ctx.drawImage(liveVideo, 0, 0, snapshotCanvas.width, snapshotCanvas.height);
+      snapshotCanvas.toBlob((blob) => {
+        if (!blob) return showToast("Snapshot failed.");
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `CAM-01_${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        showToast("Snapshot saved.");
+      }, "image/png");
+    });
+
+    window.addEventListener("beforeunload", () => {
+      if (reader.pc) reader.pc.close();
+    });
+
+    setConnectionUi("idle");
+    log("Ready. Start MediaMTX + FFmpeg publisher for /maix01, then click Connect.");
+  </script>
+</body>
+</html>

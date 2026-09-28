@@ -1,0 +1,8 @@
+id: maix_rtsp
+name: Maix RTSP AV
+version: 1.0.0
+icon: /maixapp/share/icon/icon.json
+author: Local
+desc: Camera and microphone RTSP stream
+files:
+  main.py: main.py

@@ -1,0 +1,10 @@
+.talkback_token
+auto.key
+auto.crt
+mediamtx.exe
+recordings/
+*.log
+*.mp4
+*.h264
+__pycache__/
+.pytest_cache/

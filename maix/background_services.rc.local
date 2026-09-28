@@ -1,0 +1,6 @@
+#!/bin/sh
+
+# Camera RTSP is managed by the Maix app launcher, not by this script.
+export HOME=/root
+nohup python3 /root/soundpeats_auto.py --mac 28:52:E0:16:73:CE </dev/null >>/root/soundpeats-auto.log 2>&1 &
+nohup python3 /root/talkback_receiver.py </dev/null >>/root/talkback-receiver.log 2>&1 &
