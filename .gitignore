@@ -6,5 +6,6 @@ recordings/
 *.log
 *.mp4
 *.h264
+*.raw
 __pycache__/
 .pytest_cache/

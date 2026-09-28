@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parent
 def list_host_processes():
     """Read Windows process paths and command lines, with a path-only fallback."""
     scripts = [
-        ("Get-CimInstance Win32_Process -Filter \"Name = 'mediamtx.exe' OR Name = 'ffmpeg.exe'\" "
+        ("Get-CimInstance Win32_Process -Filter \"Name = 'mediamtx.exe' OR Name = 'ffmpeg.exe' OR Name = 'python.exe' OR Name = 'pythonw.exe'\" "
          "| Select-Object @{Name='id';Expression={$_.ProcessId}},"
          "@{Name='path';Expression={$_.ExecutablePath}},"
          "@{Name='command_line';Expression={$_.CommandLine}} | ConvertTo-Json -Compress"),
@@ -41,7 +41,20 @@ def list_host_processes():
     raise RuntimeError("Could not inspect existing MediaMTX processes")
 
 
-def stop_previous_host(processes, terminate_pid, current_pid=None):
+def operator_listener_pids(port=8000):
+    result = subprocess.run(["netstat", "-ano", "-p", "tcp"], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError("Could not inspect operator port owners")
+    pids = set()
+    for line in result.stdout.splitlines():
+        columns = line.split()
+        if (len(columns) == 5 and columns[1].endswith(f":{port}")
+                and columns[3].upper() == "LISTENING"):
+            pids.add(int(columns[4]))
+    return pids
+
+
+def stop_previous_host(processes, terminate_pid, current_pid=None, operator_pids=()):
     """Stop only this project's relay and its matching FFmpeg publisher."""
     own_media = os.path.normcase(str(ROOT / "mediamtx.exe"))
     stopped = []
@@ -58,7 +71,11 @@ def stop_previous_host(processes, terminate_pid, current_pid=None):
                             and ":8554/live" in command
                             and "libopus" in command
                             and re.search(r"rtsp://[^\s\"']+:8554/maix01", command))
-        if is_own_media or is_own_publisher:
+        is_own_operator = (pid in operator_pids
+                           and Path(path).name.lower() in ("python.exe", "pythonw.exe")
+                           and (re.search(r"(?i)(?:^|[\\/\s])app\.py(?=[\"'\s]|$)", command)
+                                or ("pc.operator_server" in command and "/maix01" in command)))
+        if is_own_media or is_own_publisher or is_own_operator:
             terminate_pid(pid)
             stopped.append(pid)
     return stopped
@@ -66,7 +83,8 @@ def stop_previous_host(processes, terminate_pid, current_pid=None):
 
 def stop_old_processes():
     stopped = stop_previous_host(
-        list_host_processes(), lambda pid: os.kill(pid, signal.SIGTERM), os.getpid())
+        list_host_processes(), lambda pid: os.kill(pid, signal.SIGTERM), os.getpid(),
+        operator_listener_pids())
     if stopped:
         print(f"Stopped previous host processes: {', '.join(map(str, stopped))}", flush=True)
         time.sleep(0.2)
@@ -85,9 +103,13 @@ def parse_args(argv=None):
 def publisher_command(maix_ip, ffmpeg="ffmpeg"):
     return [
         ffmpeg, "-hide_banner", "-loglevel", "warning", "-nostats",
-        "-rtsp_transport", "tcp", "-analyzeduration", "10000000",
-        "-probesize", "20000000", "-i", f"rtsp://{maix_ip}:8554/live",
-        "-map", "0:v:0", "-map", "0:a:0", "-c:v", "copy",
+        "-rtsp_transport", "tcp",
+        "-fflags", "nobuffer", "-flags", "low_delay",
+        "-analyzeduration", "1000000", "-probesize", "1000000",
+        "-i", f"rtsp://{maix_ip}:8554/live",
+        "-rtsp_transport", "tcp",
+        "-i", "rtsp://127.0.0.1:8554/air6mic",
+        "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
         "-bsf:v", "filter_units=remove_types=0,dump_extra=freq=keyframe",
         "-c:a", "libopus", "-ar", "48000", "-ac", "1", "-b:a", "64k",
         "-f", "rtsp", "-rtsp_transport", "tcp",
@@ -108,6 +130,28 @@ def wait_for_relay(process):
     raise RuntimeError("MediaMTX did not open RTSP port 8554 within 10 seconds")
 
 
+def rtsp_path_available(path):
+    request = (f"DESCRIBE rtsp://127.0.0.1:8554/{path} RTSP/1.0\r\n"
+               "CSeq: 1\r\nAccept: application/sdp\r\n\r\n").encode()
+    try:
+        with socket.create_connection(("127.0.0.1", 8554), timeout=1) as rtsp:
+            rtsp.sendall(request)
+            return rtsp.recv(64).startswith(b"RTSP/1.0 200")
+    except OSError:
+        return False
+
+
+def wait_for_audio(process):
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError("MediaMTX exited while waiting for Air6 HS microphone")
+        if rtsp_path_available("air6mic"):
+            return
+        time.sleep(0.5)
+    raise RuntimeError("Air6 HS microphone did not publish /air6mic within 30 seconds")
+
+
 def stop_process(process):
     if process is not None and process.poll() is None:
         process.terminate()
@@ -119,7 +163,8 @@ def stop_process(process):
 
 
 def run(args, spawn=subprocess.Popen, server_factory=ThreadingHTTPServer,
-        wait_for_relay=wait_for_relay, stop_existing=stop_old_processes):
+        wait_for_relay=wait_for_relay, wait_for_audio=wait_for_audio,
+        stop_existing=stop_old_processes, path_available=rtsp_path_available):
     media_exe = ROOT / "mediamtx.exe"
     media_config = ROOT / "mediamtx.yml"
     if not media_exe.is_file() or not media_config.is_file():
@@ -139,7 +184,11 @@ def run(args, spawn=subprocess.Popen, server_factory=ThreadingHTTPServer,
     try:
         relay = spawn([str(media_exe), str(media_config)], cwd=ROOT)
         wait_for_relay(relay)
+        print("Waiting for Air6 HS microphone stream...", flush=True)
+        wait_for_audio(relay)
         publisher = spawn(publisher_command(args.maix_ip), cwd=ROOT)
+        publisher_started = time.monotonic()
+        last_health_check = publisher_started
         server = server_factory((args.bind_host, args.port), make_handler(manager, talkback=talkback))
         server.timeout = 0.5
         print(f"Operator UI: http://{args.bind_host}:{args.port}/operator_test.html", flush=True)
@@ -147,8 +196,18 @@ def run(args, spawn=subprocess.Popen, server_factory=ThreadingHTTPServer,
             while True:
                 if relay.poll() is not None:
                     raise RuntimeError("MediaMTX exited")
-                if publisher.poll() is not None:
-                    raise RuntimeError("FFmpeg publisher exited; check the camera RTSP stream")
+                now = time.monotonic()
+                publisher_exited = publisher.poll() is not None
+                check_stream = now - publisher_started >= 10 and now - last_health_check >= 2
+                if check_stream:
+                    last_health_check = now
+                if publisher_exited or (check_stream and not path_available("maix01")):
+                    print("FFmpeg publisher lost its stream; reconnecting...", flush=True)
+                    stop_process(publisher)
+                    wait_for_audio(relay)
+                    publisher = spawn(publisher_command(args.maix_ip), cwd=ROOT)
+                    publisher_started = time.monotonic()
+                    last_health_check = publisher_started
                 server.handle_request()
         except KeyboardInterrupt:
             pass

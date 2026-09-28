@@ -9,6 +9,10 @@ import time
 from pathlib import Path
 
 
+PAUSE_PATH = Path("/run/air6-mic-paused")
+ACK_PATH = Path("/run/air6-mic-paused.ack")
+
+
 def valid_packet(packet, token):
     if len(packet) < 19 or not hmac.compare_digest(packet[3:19], token):
         return None
@@ -19,39 +23,54 @@ def valid_packet(packet, token):
     return None
 
 
-def mono_to_stereo(pcm):
-    return b"".join(pcm[index:index + 2] * 2 for index in range(0, len(pcm), 2))
-
-
 class TalkbackReceiver:
-    def __init__(self, token, bind=("0.0.0.0", 9002), spawn=subprocess.Popen):
+    def __init__(self, token, bind=("0.0.0.0", 9002), spawn=subprocess.Popen,
+                 pause_path=PAUSE_PATH, ack_path=ACK_PATH):
         self.token = token
         self.bind = bind
         self.spawn = spawn
         self.player = None
         self.last_packet = 0.0
+        self.pause_path = Path(pause_path)
+        self.ack_path = Path(ack_path)
+
+    def _pause_mic(self):
+        if self.pause_path.exists():
+            return
+        self.ack_path.unlink(missing_ok=True)
+        self.pause_path.touch()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if self.ack_path.exists():
+                return
+            time.sleep(0.02)
+        self.pause_path.unlink(missing_ok=True)
+        raise RuntimeError("Air6 HS microphone did not pause for talkback")
 
     def _player(self):
         if self.player is None or self.player.poll() is not None:
             self.player = self.spawn(
-                ["aplay", "-q", "-D", "bt_output", "-f", "S16_LE", "-r", "48000", "-c", "2"],
+                ["aplay", "-q", "-D", "bt_output", "-f", "S16_LE", "-r", "8000", "-c", "1"],
                 stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, bufsize=0,
                 env={**os.environ, "HOME": "/root"},
             )
         return self.player
 
     def stop(self):
-        if self.player is None:
-            return
-        try:
-            self.player.stdin.close()
-            self.player.wait(timeout=5)
-        except Exception:
-            self.player.kill()
-            self.player.wait(timeout=2)
-        self.player = None
+        if self.player is not None:
+            try:
+                self.player.terminate()
+                self.player.stdin.close()
+                self.player.wait(timeout=0.5)
+            except Exception:
+                self.player.kill()
+                self.player.wait(timeout=2)
+            self.player = None
+        self.pause_path.unlink(missing_ok=True)
+        self.ack_path.unlink(missing_ok=True)
 
     def serve(self):
+        self.stop()
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
             udp.bind(self.bind)
             udp.settimeout(1)
@@ -73,8 +92,10 @@ class TalkbackReceiver:
                         continue
                     self.last_packet = time.monotonic()
                     try:
-                        self._player().stdin.write(mono_to_stereo(pcm))
-                    except (BrokenPipeError, OSError):
+                        self._pause_mic()
+                        self._player().stdin.write(pcm)
+                    except (BrokenPipeError, OSError, RuntimeError) as error:
+                        print("Talkback playback error:", error, flush=True)
                         self.stop()
             finally:
                 self.stop()

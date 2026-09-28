@@ -524,8 +524,37 @@
     let talkbackContext = null;
     let talkbackSource = null;
     let talkbackProcessor = null;
-    let talkbackSending = false;
-    let talkbackPending = Promise.resolve();
+    let talkbackQueue = [];
+    let talkbackQueuedFrames = 0;
+    let talkbackFlushPromise = null;
+    const talkbackBatchFrames = 800;
+    const talkbackMaxFrames = 4000;
+
+    function flushTalkback(force = false) {
+      if (talkbackFlushPromise) return talkbackFlushPromise;
+      if (!force && talkbackQueuedFrames < talkbackBatchFrames) return Promise.resolve();
+      talkbackFlushPromise = (async () => {
+        while (talkbackQueue.length) {
+          const chunks = talkbackQueue.splice(0);
+          const pcm = new Int16Array(talkbackQueuedFrames);
+          talkbackQueuedFrames = 0;
+          let offset = 0;
+          for (const chunk of chunks) {
+            pcm.set(chunk, offset);
+            offset += chunk.length;
+          }
+          try {
+            const response = await fetch("/api/talkback/audio", {
+              method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: pcm.buffer,
+            });
+            if (!response.ok) throw new Error(`Talkback HTTP ${response.status}`);
+          } catch (error) {
+            log(`talkback error: ${error.message}`);
+          }
+        }
+      })().finally(() => { talkbackFlushPromise = null; });
+      return talkbackFlushPromise;
+    }
 
     function showTalkbackState(active) {
       talkButtons.forEach((button) => {
@@ -561,21 +590,21 @@
         const source = context.createMediaStreamSource(stream);
         const processor = context.createScriptProcessor(2048, 1, 1);
         processor.onaudioprocess = (audioEvent) => {
-          if (!talkbackWanted || talkbackSending) return;
+          if (!talkbackWanted) return;
           const input = audioEvent.inputBuffer.getChannelData(0);
-          const outputLength = Math.round(input.length * 48000 / context.sampleRate);
+          const outputLength = Math.round(input.length * 8000 / context.sampleRate);
           const pcm = new Int16Array(outputLength);
           for (let index = 0; index < outputLength; index++) {
-            const sourceIndex = Math.min(input.length - 1, Math.floor(index * context.sampleRate / 48000));
+            const sourceIndex = Math.min(input.length - 1, Math.floor(index * context.sampleRate / 8000));
             const sample = Math.max(-1, Math.min(1, input[sourceIndex]));
             pcm[index] = sample < 0 ? sample * 32768 : sample * 32767;
           }
-          talkbackSending = true;
-          talkbackPending = fetch("/api/talkback/audio", {
-            method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: pcm.buffer,
-          }).then((response) => {
-            if (!response.ok) throw new Error(`Talkback HTTP ${response.status}`);
-          }).catch((error) => log(`talkback error: ${error.message}`)).finally(() => { talkbackSending = false; });
+          talkbackQueue.push(pcm);
+          talkbackQueuedFrames += pcm.length;
+          while (talkbackQueuedFrames > talkbackMaxFrames && talkbackQueue.length > 1) {
+            talkbackQueuedFrames -= talkbackQueue.shift().length;
+          }
+          if (talkbackQueuedFrames >= talkbackBatchFrames) flushTalkback();
         };
         source.connect(processor);
         processor.connect(context.destination);
@@ -600,19 +629,23 @@
       if (talkbackContext) await talkbackContext.close();
       talkbackProcessor = talkbackSource = talkbackStream = talkbackContext = null;
       showTalkbackState(false);
-      await talkbackPending;
+      await flushTalkback(true);
       fetch("/api/talkback/stop", { method: "POST" }).catch((error) => log(`talkback stop error: ${error.message}`));
     }
 
     talkButtons.forEach((button) => {
-      button.addEventListener("pointerdown", startTalkback);
+      button.addEventListener("pointerdown", (event) => {
+        button.setPointerCapture(event.pointerId);
+        startTalkback(event);
+      });
       button.addEventListener("pointerup", stopTalkback);
       button.addEventListener("pointercancel", stopTalkback);
-      button.addEventListener("pointerleave", stopTalkback);
       button.addEventListener("keydown", (event) => { if (event.key === " " || event.key === "Enter") startTalkback(event); });
       button.addEventListener("keyup", (event) => { if (event.key === " " || event.key === "Enter") stopTalkback(); });
     });
-    window.addEventListener("blur", stopTalkback);
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) stopTalkback();
+    });
     refreshTalkback();
     let recordingActive = false;
     let recordingBusy = false;

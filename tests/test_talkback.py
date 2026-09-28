@@ -1,8 +1,11 @@
 import unittest
+import tempfile
+import threading
+from pathlib import Path
 from unittest.mock import Mock
 
 from pc.talkback import TalkbackRelay, make_packet
-from maix.talkback_receiver import TalkbackReceiver, mono_to_stereo, valid_packet
+from maix.talkback_receiver import TalkbackReceiver, valid_packet
 
 
 class TalkbackTests(unittest.TestCase):
@@ -14,11 +17,7 @@ class TalkbackTests(unittest.TestCase):
         receiver._player()
 
         self.assertEqual(spawn.call_args.kwargs["env"]["HOME"], "/root")
-        self.assertEqual(spawn.call_args.args[0][-1], "2")
-
-    def test_receiver_duplicates_mono_samples_for_air6_stereo(self):
-        self.assertEqual(mono_to_stereo(b"\x01\x02\x03\x04"),
-                         b"\x01\x02\x01\x02\x03\x04\x03\x04")
+        self.assertEqual(spawn.call_args.args[0][-3:], ["8000", "-c", "1"])
 
     def test_pcm_is_split_into_authenticated_udp_packets(self):
         udp = Mock()
@@ -43,6 +42,21 @@ class TalkbackTests(unittest.TestCase):
         packet = make_packet(b"a" * 16, b"", stop=True)
         self.assertEqual(valid_packet(packet, b"a" * 16), ("stop", b""))
         self.assertIsNone(valid_packet(packet, b"b" * 16))
+
+    def test_talkback_waits_for_mic_pause_and_restores_capture_on_stop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pause_path = Path(directory) / "pause"
+            ack_path = Path(directory) / "ack"
+            receiver = TalkbackReceiver(b"a" * 16, pause_path=pause_path, ack_path=ack_path)
+            timer = threading.Timer(0.05, ack_path.touch)
+            timer.start()
+            try:
+                receiver._pause_mic()
+                self.assertTrue(pause_path.exists())
+                receiver.stop()
+                self.assertFalse(pause_path.exists())
+            finally:
+                timer.join()
 
 
 if __name__ == "__main__":

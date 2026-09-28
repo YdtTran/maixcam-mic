@@ -45,6 +45,7 @@ elseif ($Password) {
 $files = @(
     @{ Source = 'maix/rtsp_av.py'; Destination = 'rtsp_av.py' },
     @{ Source = 'maix/soundpeats_auto.py'; Destination = 'soundpeats_auto.py' },
+    @{ Source = 'maix/air6_mic_stream.py'; Destination = 'air6_mic_stream.py' },
     @{ Source = 'maix/talkback_receiver.py'; Destination = 'talkback_receiver.py' },
     @{ Source = 'maix/rtsp_app.yaml'; Destination = 'rtsp_app.yaml' },
     @{ Source = 'maix/background_services.rc.local'; Destination = 'background_services.rc.local' },

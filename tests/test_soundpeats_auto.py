@@ -23,8 +23,23 @@ class SoundpeatsConnectorTests(unittest.TestCase):
             self.assertIn(["bluetoothctl", "connect", "28:52:E0:16:73:CE"], commands)
             self.assertIn("bluealsa", config.read_text())
             self.assertIn('device "28:52:E0:16:73:CE"', config.read_text())
-            self.assertIn('channels 2', config.read_text())
-            self.assertIn('capture.pcm "hw:0,0"', config.read_text())
+            self.assertIn('profile "a2dp"', config.read_text())
+            self.assertIn('profile "sco"', config.read_text())
+            self.assertIn('capture.pcm "bt_input"', config.read_text())
+
+    def test_starts_bluealsa_with_hands_free_gateway(self):
+        spawned = []
+
+        def run(command, timeout=20):
+            return (1, "") if command[0] == "pidof" else (0, "Paired: yes\nConnected: yes")
+
+        with tempfile.TemporaryDirectory() as directory:
+            connector = SoundpeatsConnector("28:52:E0:16:73:CE", run=run,
+                                            spawn=lambda command, **kwargs: spawned.append(command),
+                                            config_path=Path(directory) / ".asoundrc")
+            self.assertTrue(connector.attempt())
+
+        self.assertIn("hfp-ag", spawned[0])
 
     def test_failed_pair_does_not_change_audio_route(self):
         def run(command, timeout=20):

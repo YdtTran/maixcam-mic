@@ -1,8 +1,4 @@
-"""Run on MaixCAM: reconnect SOUNDPEATS and route ALSA playback to BlueALSA.
-
-The RTSP script keeps its existing MaixPy audio.Recorder microphone input.
-Put the earbuds into pairing mode for the first pairing attempt.
-"""
+"""Run on MaixCAM: reconnect Air6 HS and route two-way voice through BlueALSA."""
 
 import argparse
 import os
@@ -36,7 +32,7 @@ class SoundpeatsConnector:
     def _start_bluealsa(self):
         code, _ = self.run(["pidof", "bluealsa"])
         if code != 0:
-            self.spawn(["bluealsa", "-p", "a2dp-source"], stdin=subprocess.DEVNULL,
+            self.spawn(["bluealsa", "-p", "a2dp-source", "-p", "hfp-ag", "-p", "hsp-ag"], stdin=subprocess.DEVNULL,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                        start_new_session=True)
             time.sleep(1)
@@ -44,8 +40,9 @@ class SoundpeatsConnector:
     def _route_playback(self):
         config = (
             ROUTE_MARKER + "\n"
-            + 'pcm.bt_output { type plug slave { pcm { type bluealsa device "' + self.mac + '" profile "a2dp" } channels 2 } }\n'
-            + 'pcm.!default { type asym playback.pcm "bt_output" capture.pcm "hw:0,0" }\n'
+            + 'pcm.bt_output { type plug slave { pcm { type bluealsa device "' + self.mac + '" profile "a2dp" } rate 48000 channels 2 } }\n'
+            + 'pcm.bt_input { type plug slave { pcm { type bluealsa device "' + self.mac + '" profile "sco" } rate 8000 channels 1 } }\n'
+            + 'pcm.!default { type asym playback.pcm "bt_output" capture.pcm "bt_input" }\n'
         )
         if self.config_path.exists():
             existing = self.config_path.read_text()

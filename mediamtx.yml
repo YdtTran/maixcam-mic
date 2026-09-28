@@ -1,3 +1,5 @@
 paths:
+  air6mic:
+    source: publisher
   maix01:
     source: publisher
