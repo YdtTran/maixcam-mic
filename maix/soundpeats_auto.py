@@ -1,4 +1,4 @@
-"""Run on MaixCAM: reconnect Air6 HS and route two-way voice through BlueALSA."""
+"""Run on MaixCAM: connect the selected headset and route audio through BlueALSA."""
 
 import argparse
 import os
@@ -6,6 +6,11 @@ import re
 import subprocess
 import time
 from pathlib import Path
+
+try:
+    from .bluetooth_control import BluetoothControl, SELECTION_PATH, serve
+except ImportError:  # Run directly on MaixCAM.
+    from bluetooth_control import BluetoothControl, SELECTION_PATH, serve
 
 
 ROUTE_MARKER = "# managed by soundpeats_auto.py"
@@ -64,7 +69,6 @@ class SoundpeatsConnector:
             if code != 0:
                 print("Pairing pending:", output.strip(), flush=True)
                 return False
-        self.run(["bluetoothctl", "trust", self.mac])
         if "Connected: yes" not in info:
             code, output = self.run(["bluetoothctl", "connect", self.mac], timeout=20)
             if code != 0:
@@ -76,16 +80,29 @@ class SoundpeatsConnector:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mac", required=True, help="Bluetooth MAC address of the earbuds")
+    parser.add_argument("--selection", type=Path, default=SELECTION_PATH)
+    parser.add_argument("--token", type=Path, default=Path("/root/.talkback_token"))
     args = parser.parse_args()
-    connector = SoundpeatsConnector(args.mac)
-    while True:
-        try:
-            connected = connector.attempt()
-            print("SOUNDPEATS connected" if connected else "Retrying SOUNDPEATS", flush=True)
-        except Exception as error:
-            print("SOUNDPEATS error:", error, flush=True)
-        time.sleep(15)
+    token = args.token.read_text().strip()
+    if len(bytes.fromhex(token)) != 16:
+        raise ValueError("control token must contain 32 hex digits")
+    legacy_mac = BluetoothControl(Path("/root/.bluetooth_device")).selected()
+    if legacy_mac:
+        run_command(["bluetoothctl", "untrust", legacy_mac])
+        run_command(["bluetoothctl", "disconnect", legacy_mac])
+    control = None
+
+    def connect(mac):
+        previous = control.selected()
+        if not SoundpeatsConnector(mac).attempt():
+            return False
+        if previous and previous != mac:
+            run_command(["bluetoothctl", "disconnect", previous])
+        print(f"Bluetooth {mac} connected by operator selection", flush=True)
+        return True
+
+    control = BluetoothControl(args.selection, connect=connect)
+    serve(control, token)
 
 
 if __name__ == "__main__":

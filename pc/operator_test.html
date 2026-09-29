@@ -37,7 +37,7 @@
       overflow: hidden;
     }
 
-    button, input { font: inherit; }
+    button, input, select { font: inherit; }
     button { color: inherit; }
 
     .app-shell {
@@ -309,6 +309,7 @@
       width: 100%; border: 1px solid #2a3b4e; background: #091019; color: #dce6f0;
       border-radius: 5px; padding: 9px 10px; font-size: 12px; outline: none;
     }
+    .device-select { width: 100%; min-height: 36px; padding: 7px; border: 1px solid #2a3b4e; border-radius: 5px; background: #091019; color: #dce6f0; }
     .settings-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 9px; }
     .mini-btn { padding: 8px; border: 1px solid #2b3d50; background: #172432; border-radius: 5px; cursor: pointer; font-size: 11px; }
     .mini-btn:disabled { opacity: .45; cursor: not-allowed; }
@@ -450,6 +451,18 @@
             <div class="section-title">🎙 Talkback</div>
             <button id="talkBtn" class="full-btn" type="button" disabled>🎙 &nbsp; Hold to Talk</button>
             <div id="talkHint" class="hint">Checking MaixCAM talkback…</div>
+          </div>
+          <div class="section-block">
+            <div class="section-title">Bluetooth audio device</div>
+            <div id="bluetoothStatus" class="hint" role="status">Checking camera Bluetooth…</div>
+            <div class="settings-box">
+              <label for="bluetoothDevices">Nearby and known devices on MaixCAM</label>
+              <select id="bluetoothDevices" class="device-select" disabled><option value="">Scan to find devices</option></select>
+              <div class="settings-actions">
+                <button id="scanBluetoothBtn" class="mini-btn" type="button">Scan</button>
+                <button id="selectBluetoothBtn" class="mini-btn" type="button" disabled>Use device</button>
+              </div>
+            </div>
           </div>
           <div class="section-block">
             <div class="section-title"><span class="dot red"></span> Recording</div>
@@ -647,6 +660,76 @@
       if (document.hidden) stopTalkback();
     });
     refreshTalkback();
+    const bluetoothStatus = document.getElementById("bluetoothStatus");
+    const bluetoothDevices = document.getElementById("bluetoothDevices");
+    const scanBluetoothBtn = document.getElementById("scanBluetoothBtn");
+    const selectBluetoothBtn = document.getElementById("selectBluetoothBtn");
+    let bluetoothBusy = false;
+
+    async function bluetoothRequest(path, method = "GET", body = null) {
+      const response = await fetch(path, { method, headers: body ? { "Content-Type": "application/json" } : {},
+        body: body ? JSON.stringify(body) : null });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || `Bluetooth HTTP ${response.status}`);
+      return payload;
+    }
+
+    function showBluetoothStatus(status) {
+      bluetoothStatus.textContent = status.selected
+        ? `${status.connected ? "Connected" : "Not connected"}: ${status.selected}`
+        : "No device connected. Put your headset in pairing mode, scan, then choose it.";
+    }
+
+    async function refreshBluetooth() {
+      if (bluetoothBusy) return;
+      try { showBluetoothStatus(await bluetoothRequest("/api/bluetooth/status")); }
+      catch (error) { bluetoothStatus.textContent = error.message; }
+    }
+
+    bluetoothDevices.addEventListener("change", () => {
+      selectBluetoothBtn.disabled = bluetoothBusy || !bluetoothDevices.value;
+    });
+    scanBluetoothBtn.addEventListener("click", async () => {
+      bluetoothBusy = true;
+      scanBluetoothBtn.disabled = selectBluetoothBtn.disabled = true;
+      bluetoothStatus.textContent = "Scanning nearby devices for 15 seconds…";
+      try {
+        const result = await bluetoothRequest("/api/bluetooth/scan", "POST");
+        bluetoothDevices.replaceChildren();
+        for (const device of result.devices) {
+          const option = document.createElement("option");
+          option.value = device.mac;
+          option.textContent = `${device.name} (${device.mac})`;
+          bluetoothDevices.append(option);
+        }
+        if (!result.devices.length) bluetoothDevices.add(new Option("No devices found", ""));
+        bluetoothDevices.disabled = !result.devices.length;
+        if (result.selected && result.devices.some((device) => device.mac === result.selected)) bluetoothDevices.value = result.selected;
+        showBluetoothStatus(result);
+      } catch (error) { bluetoothStatus.textContent = error.message; showToast(error.message); }
+      finally {
+        bluetoothBusy = false;
+        scanBluetoothBtn.disabled = false;
+        selectBluetoothBtn.disabled = !bluetoothDevices.value;
+      }
+    });
+    selectBluetoothBtn.addEventListener("click", async () => {
+      if (!bluetoothDevices.value) return;
+      bluetoothBusy = true;
+      selectBluetoothBtn.disabled = scanBluetoothBtn.disabled = true;
+      try {
+        const result = await bluetoothRequest("/api/bluetooth/select", "POST", { mac: bluetoothDevices.value });
+        showBluetoothStatus(result);
+        showToast("Bluetooth device connected.");
+      } catch (error) { showToast(error.message); }
+      finally {
+        bluetoothBusy = false;
+        scanBluetoothBtn.disabled = false;
+        selectBluetoothBtn.disabled = !bluetoothDevices.value;
+      }
+    });
+    refreshBluetooth();
+    setInterval(refreshBluetooth, 5000);
     let recordingActive = false;
     let recordingBusy = false;
 

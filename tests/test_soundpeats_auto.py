@@ -1,11 +1,28 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from maix.soundpeats_auto import SoundpeatsConnector
+from maix.soundpeats_auto import SoundpeatsConnector, main
 
 
 class SoundpeatsConnectorTests(unittest.TestCase):
+    def test_service_start_does_not_connect_saved_device(self):
+        with tempfile.TemporaryDirectory() as directory:
+            token = Path(directory) / "token"
+            token.write_text("a" * 32)
+            selection = Path(directory) / "selected"
+            selection.write_text("28:52:E0:16:73:CE\n")
+            with patch("sys.argv", ["soundpeats_auto.py", "--token", str(token), "--selection", str(selection)]), \
+                 patch("maix.soundpeats_auto.serve") as serve, \
+                 patch("maix.soundpeats_auto.SoundpeatsConnector") as connector, \
+                 patch("maix.soundpeats_auto.time.sleep", side_effect=KeyboardInterrupt):
+                try:
+                    main()
+                except KeyboardInterrupt:
+                    pass
+            serve.assert_called_once()
+            connector.assert_not_called()
     def test_pairs_then_connects_and_routes_playback_only(self):
         commands = []
 

@@ -45,6 +45,7 @@ elseif ($Password) {
 $files = @(
     @{ Source = 'maix/rtsp_av.py'; Destination = 'rtsp_av.py' },
     @{ Source = 'maix/soundpeats_auto.py'; Destination = 'soundpeats_auto.py' },
+    @{ Source = 'maix/bluetooth_control.py'; Destination = 'bluetooth_control.py' },
     @{ Source = 'maix/air6_mic_stream.py'; Destination = 'air6_mic_stream.py' },
     @{ Source = 'maix/talkback_receiver.py'; Destination = 'talkback_receiver.py' },
     @{ Source = 'maix/rtsp_app.yaml'; Destination = 'rtsp_app.yaml' },
@@ -76,6 +77,14 @@ foreach ($file in $files) {
     if ($LASTEXITCODE -ne 0) {
         throw "Upload failed for $($file.Source) (pscp exit code $LASTEXITCODE)."
     }
+}
+
+# The camera runs this file with /bin/sh; remove Windows CRLF after transfer.
+$remoteBoot = "$RemoteDir/background_services.rc.local"
+$normalizeBoot = "tr -d '\015' < '$remoteBoot' > '$remoteBoot.tmp' && mv '$remoteBoot.tmp' '$remoteBoot' && sh -n '$remoteBoot'"
+& plink @sshOptions $target $normalizeBoot
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not normalize the MaixCAM boot script (plink exit code $LASTEXITCODE)."
 }
 
 Write-Host "[UPLOAD] Complete. Files are in $RemoteDir on $target."

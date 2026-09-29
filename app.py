@@ -13,6 +13,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from pc.operator_server import RecordingManager, make_handler
+from pc.bluetooth_client import CameraBluetoothClient
 from pc.talkback import TalkbackRelay
 
 
@@ -175,9 +176,11 @@ def run(args, spawn=subprocess.Popen, server_factory=ThreadingHTTPServer,
 
     token_path = args.talkback_token
     talkback = None
+    bluetooth = None
     if token_path.is_file():
         token = bytes.fromhex(token_path.read_text().strip())
         talkback = TalkbackRelay(token, (args.maix_ip, 9002))
+        bluetooth = CameraBluetoothClient(args.maix_ip, token.hex())
 
     relay = publisher = server = None
     manager = RecordingManager(args.recordings)
@@ -189,7 +192,7 @@ def run(args, spawn=subprocess.Popen, server_factory=ThreadingHTTPServer,
         publisher = spawn(publisher_command(args.maix_ip), cwd=ROOT)
         publisher_started = time.monotonic()
         last_health_check = publisher_started
-        server = server_factory((args.bind_host, args.port), make_handler(manager, talkback=talkback))
+        server = server_factory((args.bind_host, args.port), make_handler(manager, talkback=talkback, bluetooth=bluetooth))
         server.timeout = 0.5
         print(f"Operator UI: http://{args.bind_host}:{args.port}/operator_test.html", flush=True)
         try:

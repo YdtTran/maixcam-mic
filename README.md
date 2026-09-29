@@ -1,6 +1,6 @@
 ﻿# MaixCAM RTSP operator
 
-This project relays MaixCAM video and SOUNDPEATS Air6 HS microphone audio to a local web operator page. The PC can record the relay as MP4 and send microphone talkback audio to the earbuds through MaixCAM.
+This project relays MaixCAM video and a selected Bluetooth headset microphone to a local web operator page. The PC can record the relay as MP4 and send microphone talkback audio to the headset through MaixCAM.
 
 ## Directory layout
 
@@ -42,13 +42,13 @@ The publisher and recorder remove empty H.264 NAL units emitted by this MaixCAM.
 
 ## MaixCAM program
 
-`maix/rtsp_av.py` supplies 640 × 480 camera video to the PC publisher; it does not capture the built-in microphone. `maix/air6_mic_stream.py` captures the earbuds' microphone through BlueALSA and publishes it to `rtsp://10.127.9.237:8554/air6mic`. If the laptop IP changes, update `--target` in `maix/background_services.rc.local` and reinstall that boot script. The headset microphone uses the 8 kHz hands-free profile. While Hold to Talk is pressed, MaixCAM pauses headset mic capture, plays PC audio through the Air6 HS stereo profile, and publishes silence on `/air6mic` so the video stream stays live. Earbud mic capture resumes on release.
+`maix/rtsp_av.py` supplies 640 × 480 camera video to the PC publisher; it does not capture the built-in microphone. `maix/air6_mic_stream.py` captures the selected headset's microphone through BlueALSA and publishes it to `rtsp://10.127.9.237:8554/air6mic`. If the laptop IP changes, update `--target` in `maix/background_services.rc.local` and reinstall that boot script. The headset microphone must support the 8 kHz hands-free profile and stereo playback. While Hold to Talk is pressed, MaixCAM pauses headset mic capture, plays PC audio through its stereo profile, and publishes silence on `/air6mic` so the video stream stays live. Headset mic capture resumes on release.
 
-For two-way voice, copy `maix/talkback_receiver.py`, `maix/soundpeats_auto.py`, and `maix/air6_mic_stream.py` to the camera. The configured MAC `28:52:E0:16:73:CE` is the SOUNDPEATS Air6 HS. `soundpeats_auto.py` enables its hands-free profile for mic capture and routes playback through its stereo profile. Put them in pairing mode for the first connection. The receiver already starts from `/etc/rc.local`; do not start a second copy on UDP 9002. The boot script sets `HOME=/root` so ALSA can read `/root/.asoundrc`.
+For two-way voice, copy `maix/talkback_receiver.py`, `maix/soundpeats_auto.py`, `maix/bluetooth_control.py`, and `maix/air6_mic_stream.py` to the camera. `soundpeats_auto.py` runs the authenticated Bluetooth control service on TCP 8765. It does not connect to a headset at startup. In the operator page, put the headset in pairing mode, click **Scan**, choose it from the list, then click **Use device** to connect and route microphone and playback through BlueALSA. The active selection is kept in `/run/bluetooth_device` and clears on reboot, so each session requires an explicit choice. The list includes nearby devices reported during the scan and devices BlueZ already knows. Devices that are not discoverable cannot appear in a live scan. Until a device is selected, `/air6mic` carries silence. The receiver already starts from `/etc/rc.local`; do not start a second copy on UDP 9002. The boot script sets `HOME=/root` so ALSA can read `/root/.asoundrc`.
 
-The PC operator reads `.talkback_token` from the project root, while the camera receiver reads `/root/.talkback_token`. These files must contain the same secret and must not be committed. Hold **Hold to Talk** while speaking; release it to stop. If talkback is unavailable, check `GET /api/talkback/status`, the camera's UDP port 9002, and its receiver log.
+The PC operator reads `.talkback_token` from the project root, while the camera receiver and Bluetooth control service read `/root/.talkback_token`. These files must contain the same secret and must not be committed. Hold **Hold to Talk** while speaking; release it to stop. If talkback is unavailable, check `GET /api/talkback/status`, the camera's UDP port 9002, and its receiver log. If device scanning fails, check TCP 8765 connectivity and `/root/soundpeats-auto.log` on the camera.
 
-The operator server serves only the page, recording API, talkback API, and MP4 files. `app.py` runs that server as part of the host stack.
+The operator server serves the page, recording API, talkback API, Bluetooth control API, and MP4 files. `app.py` runs that server as part of the host stack.
 
 ## Copy and run on MaixCAM (10.127.15.230)
 
@@ -73,4 +73,4 @@ For Bluetooth and talkback, back up the current `/etc/rc.local`, then copy the s
 plink -batch -hostkey 'SHA256:MMjQMht0IcoEBBkw5OVPuwa2wrbSHpiEYHn27tdGcmY' -pw root root@10.127.15.230 'cp -p /etc/rc.local /etc/rc.local.maixcam-original && cp /root/background_services.rc.local /etc/rc.local && sh -n /etc/rc.local && reboot'
 ```
 
-After boot, `rtsp://10.127.15.230:8554/live` should serve camera video, UDP 9002 should have one talkback receiver, and `/root/air6-mic-stream.log` should show the Air6 HS mic publisher retrying until the laptop relay starts. Do not launch duplicate copies in SSH terminals. The Bluetooth helper retries pairing; put the earbuds in pairing mode if `/root/soundpeats-auto.log` says the device is unavailable. To disable RTSP auto-start, remove `/maixapp/auto_start.txt` and reboot. To restore the original background startup file, copy `/etc/rc.local.maixcam-original` back to `/etc/rc.local` and reboot. A firmware reflash changes the SSH host key, so verify the new fingerprint before using these commands.
+After boot, `rtsp://10.127.15.230:8554/live` should serve camera video, UDP 9002 should have one talkback receiver, and `/root/air6-mic-stream.log` should show the headset mic publisher retrying until the laptop relay starts. Do not launch duplicate copies in SSH terminals. If manual connection fails, put the headset in pairing mode and select it again. To disable RTSP auto-start, remove `/maixapp/auto_start.txt` and reboot. To restore the original background startup file, copy `/etc/rc.local.maixcam-original` back to `/etc/rc.local` and reboot. A firmware reflash changes the SSH host key, so verify the new fingerprint before using these commands.

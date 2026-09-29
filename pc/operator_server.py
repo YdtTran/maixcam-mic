@@ -150,7 +150,7 @@ class RecordingManager:
             return recordings
 
 
-def make_handler(manager, html_path=APP_DIR / "operator_test.html", talkback=None):
+def make_handler(manager, html_path=APP_DIR / "operator_test.html", talkback=None, bluetooth=None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format_string, *args):
             if self.path.startswith("/api/talkback/audio"):
@@ -211,6 +211,11 @@ def make_handler(manager, html_path=APP_DIR / "operator_test.html", talkback=Non
                 return self._json(200, manager.list_recordings())
             if route == "/api/talkback/status":
                 return self._json(200, {"available": talkback is not None})
+            if route == "/api/bluetooth/status":
+                if bluetooth is None:
+                    return self._json(503, {"error": "Bluetooth control is not configured"})
+                code, payload = bluetooth.request("status")
+                return self._json(code, payload)
             match = re.fullmatch(r"/api/recordings/([^/]+)/file", route)
             if match:
                 try:
@@ -246,6 +251,22 @@ def make_handler(manager, html_path=APP_DIR / "operator_test.html", talkback=Non
                     return self._json(503, {"error": "talkback is not configured"})
                 talkback.stop()
                 return self._json(200, {"stopped": True})
+            if route in ("/api/bluetooth/scan", "/api/bluetooth/select"):
+                if bluetooth is None:
+                    return self._json(503, {"error": "Bluetooth control is not configured"})
+                mac = None
+                if route.endswith("/select"):
+                    try:
+                        size = int(self.headers.get("Content-Length", "0"))
+                        if size < 1 or size > 256:
+                            raise ValueError("invalid selection body")
+                        mac = json.loads(self.rfile.read(size)).get("mac")
+                    except (ValueError, AttributeError):
+                        return self._json(400, {"error": "invalid selection body"})
+                elif self.headers.get("Content-Length", "0") != "0":
+                    return self._json(400, {"error": "request body is not supported"})
+                code, payload = bluetooth.request("select" if route.endswith("/select") else "scan", mac)
+                return self._json(code, payload)
             if self.headers.get("Content-Length", "0") != "0":
                 return self._json(400, {"error": "request body is not supported"})
             try:
@@ -276,7 +297,9 @@ def main():
     if args.talkback_token.is_file():
         token = bytes.fromhex(args.talkback_token.read_text().strip())
         talkback = TalkbackRelay(token, (args.talkback_host, 9002))
-    server = ThreadingHTTPServer((args.bind_host, args.port), make_handler(manager, talkback=talkback))
+    from .bluetooth_client import CameraBluetoothClient
+    bluetooth = CameraBluetoothClient(args.talkback_host, token.hex()) if talkback else None
+    server = ThreadingHTTPServer((args.bind_host, args.port), make_handler(manager, talkback=talkback, bluetooth=bluetooth))
     print(f"Operator UI: http://{args.bind_host}:{args.port}/operator_test.html", flush=True)
     try:
         server.serve_forever()
