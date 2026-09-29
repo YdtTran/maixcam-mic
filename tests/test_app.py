@@ -6,6 +6,10 @@ import app
 
 
 class AppTests(unittest.TestCase):
+    def test_media_executable_matches_host_platform(self):
+        self.assertEqual(app.media_executable("nt"), app.ROOT / "mediamtx.exe")
+        self.assertEqual(app.media_executable("posix"), app.ROOT / "mediamtx")
+
     def test_stops_only_previous_processes_for_this_host(self):
         processes = [
             {"id": 101, "path": str(app.ROOT / "mediamtx.exe"), "command_line": ""},

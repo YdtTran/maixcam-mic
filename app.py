@@ -1,4 +1,4 @@
-"""Start the Windows MediaMTX relay, MaixCAM publisher, and operator page."""
+"""Start the MediaMTX relay, MaixCAM publisher, and operator page."""
 
 import argparse
 import json
@@ -18,6 +18,11 @@ from pc.talkback import TalkbackRelay
 
 
 ROOT = Path(__file__).resolve().parent
+
+
+def media_executable(platform_name=None):
+    platform_name = platform_name or os.name
+    return ROOT / ("mediamtx.exe" if platform_name == "nt" else "mediamtx")
 
 
 def list_host_processes():
@@ -165,14 +170,17 @@ def stop_process(process):
 
 def run(args, spawn=subprocess.Popen, server_factory=ThreadingHTTPServer,
         wait_for_relay=wait_for_relay, wait_for_audio=wait_for_audio,
-        stop_existing=stop_old_processes, path_available=rtsp_path_available):
-    media_exe = ROOT / "mediamtx.exe"
+        stop_existing=None, path_available=rtsp_path_available):
+    media_exe = media_executable()
     media_config = ROOT / "mediamtx.yml"
     if not media_exe.is_file() or not media_config.is_file():
         raise RuntimeError("MediaMTX files are missing from the project directory")
     if shutil.which("ffmpeg") is None:
         raise RuntimeError("ffmpeg is not on PATH")
-    stop_existing()
+    if stop_existing is not None:
+        stop_existing()
+    elif os.name == "nt":
+        stop_old_processes()
 
     token_path = args.talkback_token
     talkback = None
@@ -228,6 +236,10 @@ def run(args, spawn=subprocess.Popen, server_factory=ThreadingHTTPServer,
 
 
 def main():
+    def stop(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, stop)
     try:
         run(parse_args())
     except (OSError, ValueError, RuntimeError) as error:

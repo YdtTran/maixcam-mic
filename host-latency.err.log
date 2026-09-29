@@ -1,0 +1,325 @@
+[h264 @ 0000021ae0d23140] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0000021ae0d23140] no frame!
+[h264 @ 0000021ae0d23140] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0000021ae0d23140] no frame!
+[h264 @ 0000021ae0d23140] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0000021ae0d23140] no frame!
+[h264 @ 0000021ae0d23140] non-existing PPS 0 referenced
+    Last message repeated 127.0.0.1 - - [29/Sep/2026 13:54:15] "GET /api/recordings/status HTTP/1.1" 200 -
+1127.0.0.1 - - [29/Sep/2026 13:54:15] "GET /api/recordings HTTP/1.1" 200 -
+ times
+[h264 @ 0000021ae0d23140] no frame!
+[h264 @ 0000021ae0d23140] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0000021ae0d23140] no frame!
+[h264 @ 0000021ae0d23140] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0000021ae0d23140] no frame!
+[h264 @ 0000021ae0d23140] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0000021ae0d23140] no frame!
+[h264 @ 0000021ae0d23140] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0000021ae0d23140] no frame!
+[h264 @ 0000021ae0d23140] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0000021ae0d23140] no frame!
+[h264 @ 0000021ae0d23140] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0000021ae0d23140] no frame!
+[h264 @ 0000021ae0d23140] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0000021ae0d23140] no frame!
+[h264 @ 0000021ae0d23140] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0000021ae0d23140] no frame!
+[h264 @ 0000021ae0d23140] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0000021ae0d23140] no frame!
+[h264 @ 0000021ae0d23140] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0000021ae0d23140] no frame!
+[h264 @ 0000021ae0d23140] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0000021ae0d23140] no frame!
+[h264 @ 0000021ae0d23140] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0000021ae0d23140] no frame!
+[h264 @ 0000021ae0d23140] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0000021ae0d23140] no frame!
+[h264 @ 0000021ae0d23140] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0000021ae0d23140] no frame!
+[h264 @ 0000021ae0d23140] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0000021ae0d23140] no frame!
+[h264 @ 0000021ae0d23140] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0000021ae0d23140] no frame!
+127.0.0.1 - - [29/Sep/2026 13:54:18] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:18] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:21] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:21] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:24] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:24] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:25] "GET /operator_test.html HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:25] "GET /api/talkback/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:25] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:25] "GET /api/recordings HTTP/1.1" 200 -
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+127.0.0.1 - - [29/Sep/2026 13:54:28] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:28] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:30] code 404, message Not Found
+127.0.0.1 - - [29/Sep/2026 13:54:30] "GET /favicon.ico HTTP/1.1" 404 -
+127.0.0.1 - - [29/Sep/2026 13:54:31] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:31] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:32] "GET /api/talkback/status HTTP/1.1" 200 -
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 2 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 2 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 4 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 3 packets
+127.0.0.1 - - [29/Sep/2026 13:54:34] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:34] "GET /api/recordings HTTP/1.1" 200 -
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 2 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 2 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 2 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 2 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 3 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 2 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 4 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 8 packets
+127.0.0.1 - - [29/Sep/2026 13:54:37] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:37] "GET /api/recordings HTTP/1.1" 200 -
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 3 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 4 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 2 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 2 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 2 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 3 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 4 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 6 packets
+127.0.0.1 - - [29/Sep/2026 13:54:40] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:40] "GET /api/recordings HTTP/1.1" 200 -
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 5 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 3 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 58 packets
+127.0.0.1 - - [29/Sep/2026 13:54:43] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:43] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:46] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:46] "GET /api/recordings HTTP/1.1" 200 -
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 14 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+127.0.0.1 - - [29/Sep/2026 13:54:49] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:49] "GET /api/recordings HTTP/1.1" 200 -
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 3 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 11 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 34 packets
+127.0.0.1 - - [29/Sep/2026 13:54:52] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:52] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:55] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:55] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:58] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:54:58] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:01] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:01] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:04] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:04] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:05] "POST /api/talkback/stop HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:07] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:07] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:10] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:10] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:13] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:13] "GET /api/recordings HTTP/1.1" 200 -
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 2 packets
+127.0.0.1 - - [29/Sep/2026 13:55:16] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:16] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:19] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:19] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:19] "POST /api/talkback/stop HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:22] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:22] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:25] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:25] "GET /api/recordings HTTP/1.1" 200 -
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 2 packets
+127.0.0.1 - - [29/Sep/2026 13:55:28] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:28] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:29] "GET /api/talkback/status HTTP/1.1" 200 -
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+127.0.0.1 - - [29/Sep/2026 13:55:31] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:31] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:34] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:34] "GET /api/recordings HTTP/1.1" 200 -
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 3 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 3 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 5 packets
+127.0.0.1 - - [29/Sep/2026 13:55:37] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:37] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:38] "POST /api/talkback/stop HTTP/1.1" 200 -
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 3 packets
+127.0.0.1 - - [29/Sep/2026 13:55:40] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:40] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:43] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:43] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:46] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:46] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:49] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:49] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:52] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:52] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:55] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:55] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:58] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:58] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:55:58] "POST /api/talkback/stop HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:01] "POST /api/talkback/stop HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:01] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:01] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:04] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:04] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:07] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:07] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:10] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:10] "GET /api/recordings HTTP/1.1" 200 -
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 2 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 4 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 216 packets
+127.0.0.1 - - [29/Sep/2026 13:56:13] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:13] "GET /api/recordings HTTP/1.1" 200 -
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 10 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 7 packets
+127.0.0.1 - - [29/Sep/2026 13:56:15] "POST /api/talkback/stop HTTP/1.1" 200 -
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 8 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 5 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+127.0.0.1 - - [29/Sep/2026 13:56:16] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:16] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:19] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:19] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:22] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:22] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:25] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:25] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:28] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:28] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:31] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:31] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:34] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:34] "GET /api/recordings HTTP/1.1" 200 -
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 2 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 15 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+127.0.0.1 - - [29/Sep/2026 13:56:37] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:37] "GET /api/recordings HTTP/1.1" 200 -
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 4 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 3 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 10 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 2 packets
+127.0.0.1 - - [29/Sep/2026 13:56:40] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:40] "GET /api/recordings HTTP/1.1" 200 -
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 13 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 22 packets
+[in#0/rtsp @ 0000021ae0c84280] max delay reached. need to consume packet
+[in#0/rtsp @ 0000021ae0c84280] RTP: missed 1 packets
+127.0.0.1 - - [29/Sep/2026 13:56:40] "POST /api/talkback/stop HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:43] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:43] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:46] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:46] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:49] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:49] "GET /api/recordings HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:52] "GET /api/recordings/status HTTP/1.1" 200 -
+127.0.0.1 - - [29/Sep/2026 13:56:52] "GET /api/recordings HTTP/1.1" 200 -

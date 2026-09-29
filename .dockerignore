@@ -1,0 +1,17 @@
+.git
+.agents
+.codex
+__pycache__/
+*.pyc
+.pytest_cache/
+.talkback_token
+recordings/
+*.log
+*.mp4
+*.h264
+*.raw
+mediamtx.exe
+tests/
+maix/
+upload_maix.ps1
+README.md

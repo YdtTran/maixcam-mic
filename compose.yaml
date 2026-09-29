@@ -1,0 +1,27 @@
+name: maix-cam-server
+
+services:
+  server:
+    build: .
+    image: maix-cam-server:local
+    restart: unless-stopped
+    init: true
+    environment:
+      MTX_RTSPTRANSPORTS: tcp
+      MTX_WEBRTCADDITIONALHOSTS: 127.0.0.1
+    command: ["python", "-u", "app.py", "--bind-host", "0.0.0.0", "--maix-ip", "${MAIX_IP:-10.127.15.230}"]
+    ports:
+      - "8554:8554/tcp"
+      - "127.0.0.1:8000:8000/tcp"
+      - "127.0.0.1:8889:8889/tcp"
+      - "127.0.0.1:8189:8189/udp"
+    volumes:
+      - type: bind
+        source: ./.talkback_token
+        target: /app/.talkback_token
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./recordings
+        target: /app/recordings

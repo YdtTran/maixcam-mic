@@ -1,6 +1,6 @@
 ﻿# MaixCAM RTSP operator
 
-This project relays MaixCAM video and a selected Bluetooth headset microphone to a local web operator page. The PC can record the relay as MP4 and send microphone talkback audio to the headset through MaixCAM.
+This project relays MaixCAM video and a selected Bluetooth headset microphone to a local web operator page. The PC side runs in one Docker container with MediaMTX, FFmpeg, recording, and the operator server. MaixCAM keeps its camera and Bluetooth programs on the physical device.
 
 ## Directory layout
 
@@ -20,25 +20,30 @@ maix-cam-server/
 │   └── talkback.py
 ├── recordings/           MP4 files and recording metadata
 ├── tests/
-├── app.py                One-command Windows host entry point
+├── Dockerfile            PC server image
+├── compose.yaml          PC server deployment
+├── app.py                PC server supervisor
 ├── upload_maix.ps1       PuTTY upload script for camera programs and token
-├── mediamtx.exe
 └── mediamtx.yml
 ```
 
-After the MaixCAM setup below, run one command **from the project root on the Windows laptop**:
+## Run the PC server with Docker
+
+Install Docker Desktop with Linux containers. After the MaixCAM setup below, ensure `.talkback_token` exists and matches `/root/.talkback_token` on the camera, then run from the project root:
 
 ```powershell
-python app.py
+docker compose up --build -d
 ```
 
-`app.py` stops previous copies of this project's MediaMTX relay, publisher, and operator server, then starts the included `mediamtx.exe`, a new FFmpeg publisher, and the operator server; Ctrl+C stops them. It leaves unrelated processes alone. Keep `mediamtx.exe`, `mediamtx.yml`, and the `pc/` files beside `app.py`. FFmpeg must be installed and available on `PATH` for publishing and recording. The default camera IP is `10.127.15.230`; use `python app.py --maix-ip <camera-ip>` if it changes. Startup waits up to 30 seconds for the MaixCAM Air6 HS microphone publisher, and the host restarts its FFmpeg publisher if the input stream drops.
+Open `http://127.0.0.1:8000/operator_test.html` and click **Connect**. Docker publishes RTSP port 8554 to the laptop network so MaixCAM can send `/air6mic`; the page, WHEP port 8889, and WebRTC UDP port 8189 are available on the laptop's loopback interface. The container reads `.talkback_token` without copying it into the image and saves MP4 files in the host's `recordings/` folder. Set `MAIX_IP` before `docker compose up` if the camera IP differs from `10.127.15.230`.
 
-Open `http://127.0.0.1:8000/operator_test.html` on the laptop and click **Connect**. The publisher takes video from `rtsp://<MaixIp>:8554/live` and Air6 HS microphone audio from MediaMTX's `/air6mic` path, then publishes the combined `/maix01` stream. The operator page derives its WHEP address from the browser host. The operator server binds to `127.0.0.1` by default so the browser can use its microphone; `--bind-host` selects another interface if needed.
+The publisher takes video from `rtsp://<MaixIp>:8554/live` and headset microphone audio from MediaMTX's `/air6mic` path, then publishes the combined `/maix01` stream. The operator page derives its WHEP address from the browser host. The container restarts automatically if it exits; the supervisor also restarts FFmpeg when the input stream drops. Use `docker compose logs -f` to inspect it and `docker compose down` to stop it. Stop any earlier `python app.py` process before starting Docker because both use the same ports.
+
+To run the PC side without Docker on Windows, keep `mediamtx.exe` beside `app.py`, install FFmpeg on `PATH`, and run `python app.py`. This is an alternative to Compose, not an additional service.
 
 **Start Recording** saves MP4 files to `recordings/` under this project root, regardless of the terminal's current directory. Video is copied as H.264; audio is converted from Opus to AAC. Stop recording to finalize the file before playback. The UI reports a relative storage path such as `recordings/20260917T054224Z_be738304.mp4`. To choose another directory, pass `--recordings <relative-path>`; relative paths are resolved from the project root.
 
-The publisher and recorder remove empty H.264 NAL units emitted by this MaixCAM. Start the host with `app.py` to keep that filtering in place. FFmpeg and ffprobe 9.0.1 were used to validate the stream. Run the tests with `python -m unittest discover -s tests -v`.
+The publisher and recorder remove empty H.264 NAL units emitted by this MaixCAM. The Docker image includes FFmpeg and the same `app.py` supervisor. Run the tests with `python -m unittest discover -s tests -v`.
 
 ## MaixCAM program
 
