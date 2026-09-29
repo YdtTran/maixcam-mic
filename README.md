@@ -29,7 +29,7 @@ maix-cam-server/
 
 ## Run the PC server with Docker
 
-Install Docker Desktop with Linux containers. After the MaixCAM setup below, ensure `.talkback_token` exists and matches `/root/.talkback_token` on the camera, then run from the project root:
+Install Docker Desktop with Linux containers. The cloned project includes the talkback token used by the already configured MaixCAM. From the project root, run:
 
 ```powershell
 docker compose up --build -d
@@ -51,16 +51,15 @@ The publisher and recorder remove empty H.264 NAL units emitted by this MaixCAM.
 
 For two-way voice, copy `maix/talkback_receiver.py`, `maix/soundpeats_auto.py`, `maix/bluetooth_control.py`, and `maix/air6_mic_stream.py` to the camera. `soundpeats_auto.py` runs the authenticated Bluetooth control service on TCP 8765. It does not connect to a headset at startup. In the operator page, put the headset in pairing mode, click **Scan**, choose it from the list, then click **Use device** to connect and route microphone and playback through BlueALSA. The active selection is kept in `/run/bluetooth_device` and clears on reboot, so each session requires an explicit choice. The list includes nearby devices reported during the scan and devices BlueZ already knows. Devices that are not discoverable cannot appear in a live scan. Until a device is selected, `/air6mic` carries silence. The receiver already starts from `/etc/rc.local`; do not start a second copy on UDP 9002. The boot script sets `HOME=/root` so ALSA can read `/root/.asoundrc`.
 
-The PC operator reads `.talkback_token` from the project root, while the camera receiver and Bluetooth control service read `/root/.talkback_token`. These files must contain the same secret and must not be committed. Hold **Hold to Talk** while speaking; release it to stop. If talkback is unavailable, check `GET /api/talkback/status`, the camera's UDP port 9002, and its receiver log. If device scanning fails, check TCP 8765 connectivity and `/root/soundpeats-auto.log` on the camera.
+The PC operator reads the repository's `.talkback_token`, while the camera receiver and Bluetooth control service read `/root/.talkback_token`. They must contain the same value. The repository also includes `auto.key`; Docker does not use it. Hold **Hold to Talk** while speaking; release it to stop. If talkback is unavailable, check `GET /api/talkback/status`, the camera's UDP port 9002, and its receiver log. If device scanning fails, check TCP 8765 connectivity and `/root/soundpeats-auto.log` on the camera.
 
 The operator server serves the page, recording API, talkback API, Bluetooth control API, and MP4 files. `app.py` runs that server as part of the host stack.
 
 ## Copy and run on MaixCAM (10.127.15.230)
 
-Install PuTTY and put `plink` and `pscp` on `PATH`. From PowerShell on the laptop, create the shared token if needed, then upload the MaixCAM programs, app metadata, background startup template, and token. The script uses the project root for source files even if launched from another directory. The MaixCAM root password is `root` on this device. If `.talkback_token` already exists and matches the camera, keep it instead of generating a new one.
+For a new or reset MaixCAM, install PuTTY and put `plink` and `pscp` on `PATH`. From PowerShell on the laptop, upload the MaixCAM programs, app metadata, background startup template, and included token. The script uses the project root for source files even if launched from another directory. The MaixCAM root password is `root` on this device. An already configured camera needs no repeat upload.
 
 ```powershell
-if (-not (Test-Path .talkback_token)) { python -c "import secrets; print(secrets.token_hex(16))" | Set-Content .talkback_token }
 ./upload_maix.ps1 -MaixHost 10.127.15.230 -Password root -HostKey 'SHA256:MMjQMht0IcoEBBkw5OVPuwa2wrbSHpiEYHn27tdGcmY'
 ```
 
