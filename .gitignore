@@ -1,6 +1,4 @@
 .talkback_token
-auto.key
-auto.crt
 mediamtx.exe
 recordings/
 *.log
