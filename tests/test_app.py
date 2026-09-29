@@ -1,8 +1,19 @@
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
 import app
+
+
+@contextmanager
+def fake_media_executable():
+    with TemporaryDirectory() as directory:
+        executable = Path(directory) / app.media_executable().name
+        executable.touch()
+        with patch("app.media_executable", return_value=executable):
+            yield
 
 
 class AppTests(unittest.TestCase):
@@ -54,7 +65,7 @@ class AppTests(unittest.TestCase):
         spawn = Mock(side_effect=[relay, publisher])
         args = app.parse_args(["--maix-ip", "10.127.15.230"])
 
-        with patch("app.shutil.which", return_value="ffmpeg"):
+        with fake_media_executable(), patch("app.shutil.which", return_value="ffmpeg"):
             app.run(args, spawn=spawn, server_factory=lambda *a, **k: server,
                     wait_for_relay=lambda process: None, wait_for_audio=lambda process: None,
                     stop_existing=lambda: None)
@@ -78,7 +89,7 @@ class AppTests(unittest.TestCase):
         spawn = Mock(side_effect=[relay, first_publisher, next_publisher])
         wait_for_audio = Mock()
 
-        with patch("app.shutil.which", return_value="ffmpeg"):
+        with fake_media_executable(), patch("app.shutil.which", return_value="ffmpeg"):
             app.run(app.parse_args([]), spawn=spawn, server_factory=lambda *a, **k: server,
                     wait_for_relay=lambda process: None, wait_for_audio=wait_for_audio,
                     stop_existing=lambda: None)
@@ -99,7 +110,7 @@ class AppTests(unittest.TestCase):
         spawn = Mock(side_effect=[relay, stalled_publisher, replacement])
         path_available = Mock(return_value=False)
 
-        with patch("app.shutil.which", return_value="ffmpeg"), \
+        with fake_media_executable(), patch("app.shutil.which", return_value="ffmpeg"), \
              patch("app.time.monotonic", side_effect=[0, 11, 11]):
             app.run(app.parse_args([]), spawn=spawn, server_factory=lambda *a, **k: server,
                     wait_for_relay=lambda process: None, wait_for_audio=lambda process: None,
@@ -122,7 +133,7 @@ class AppTests(unittest.TestCase):
             events.append("spawn")
             return relay if events.count("spawn") == 1 else publisher
 
-        with patch("app.shutil.which", return_value="ffmpeg"):
+        with fake_media_executable(), patch("app.shutil.which", return_value="ffmpeg"):
             app.run(app.parse_args([]), spawn=spawn,
                     server_factory=lambda *a, **k: server,
                     wait_for_relay=lambda process: None, wait_for_audio=lambda process: None,
@@ -136,7 +147,7 @@ class AppTests(unittest.TestCase):
         spawn = Mock(return_value=relay)
         args = app.parse_args([])
 
-        with patch("app.shutil.which", return_value="ffmpeg"):
+        with fake_media_executable(), patch("app.shutil.which", return_value="ffmpeg"):
             with self.assertRaisesRegex(RuntimeError, "MediaMTX"):
                 app.run(args, spawn=spawn,
                         wait_for_relay=lambda process: (_ for _ in ()).throw(RuntimeError("MediaMTX failed")),
