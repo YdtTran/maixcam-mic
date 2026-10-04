@@ -78,3 +78,9 @@ plink -batch -hostkey 'SHA256:MMjQMht0IcoEBBkw5OVPuwa2wrbSHpiEYHn27tdGcmY' -pw r
 ```
 
 After boot, `rtsp://10.127.15.230:8554/live` should serve camera video, UDP 9002 should have one talkback receiver, and `/root/air6-mic-stream.log` should show the headset mic publisher retrying until the laptop relay starts. Do not launch duplicate copies in SSH terminals. If manual connection fails, put the headset in pairing mode and select it again. To disable RTSP auto-start, remove `/maixapp/auto_start.txt` and reboot. To restore the original background startup file, copy `/etc/rc.local.maixcam-original` back to `/etc/rc.local` and reboot. A firmware reflash changes the SSH host key, so verify the new fingerprint before using these commands.
+
+## Demo
+
+![Demo](imgs/image.png)
+
+- Currently, only recording, talkback, and Bluetooth control are implemented. The operator page can be extended with additional features.
