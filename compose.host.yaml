@@ -1,0 +1,16 @@
+# Linux: bypass UDP source-port rewriting by Docker bridge/NAT.
+# Host networking exposes services directly; use host firewall rules on LAN.
+services:
+  server:
+    network_mode: host
+    ports: !reset []
+    environment:
+      HEADSET_RTP_PORT: ${HEADSET_RTP_PORT-8004}
+      MTX_RTSPADDRESS: 0.0.0.0:8554
+      MTX_RTPADDRESS: 0.0.0.0:8002
+      MTX_RTCPADDRESS: 0.0.0.0:8003
+      MTX_WEBRTCLOCALUDPADDRESS: 0.0.0.0:8189
+      MTX_WEBRTCIPSFROMINTERFACES: 'true'
+      MTX_WEBRTCADDITIONALHOSTS: ${WEBRTC_HOSTS:-127.0.0.1}
+      MTX_WEBRTCADDRESS: 127.0.0.1:8889
+    command: ["python", "-u", "app.py", "--bind-host", "127.0.0.1", "--maix-ip", "${MAIX_IP:-192.168.1.7}"]

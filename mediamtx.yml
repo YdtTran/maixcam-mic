@@ -1,5 +1,22 @@
+# Allow explicit TCP or UDP media selection; publishers default to UDP.
+# Absorb short scheduling bursts without increasing the RTP reorder deadline.
+udpReadBufferSize: 4194304
+udpMaxPayloadSize: 1200
+rtmp: false
+hls: false
+srt: false
+moq: false
+rtspTransports: [udp, tcp]
+rtpAddress: :8002
+rtcpAddress: :8003
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: ''
+webrtcAdditionalHosts: [127.0.0.1]
 paths:
-  air6mic:
+  headsetmic:
     source: publisher
   maix01:
     source: publisher
+  talkback:
+    source: publisher
+    overridePublisher: false

@@ -2,6 +2,6 @@
 
 # Camera RTSP is managed by the Maix app launcher, not by this script.
 export HOME=/root
-nohup python3 /root/soundpeats_auto.py </dev/null >>/root/soundpeats-auto.log 2>&1 &
+nohup python3 /root/bluetooth_audio.py --fixed-mac 6C:16:29:7B:00:D4 </dev/null >>/root/bluetooth-audio.log 2>&1 &
 nohup python3 /root/talkback_receiver.py </dev/null >>/root/talkback-receiver.log 2>&1 &
-nohup python3 /root/air6_mic_stream.py --target 10.127.9.237 </dev/null >>/root/air6-mic-stream.log 2>&1 &
+nohup python3 /root/headset_mic_stream.py --target 192.168.1.4 </dev/null >>/root/headset-mic-stream.log 2>&1 &

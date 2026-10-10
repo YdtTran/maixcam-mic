@@ -15,3 +15,9 @@ tests/
 maix/
 upload_maix.ps1
 README.md
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+
+.runtime/

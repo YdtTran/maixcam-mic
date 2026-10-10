@@ -1,4 +1,4 @@
-"""Bluetooth discovery and manual headset selection on MaixCAM."""
+"""Bluetooth headset status and fixed-device binding on MaixCAM."""
 
 import hmac
 import json
@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
-SELECTION_PATH = Path("/run/bluetooth_device")
+SELECTION_PATH = Path("/root/.bluetooth_device")
 MAC = re.compile(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}")
 
 
@@ -42,11 +42,18 @@ def run_command(command, timeout=20):
 
 
 class BluetoothControl:
-    def __init__(self, selection_path=SELECTION_PATH, run=run_command, connect=None):
+    def __init__(self, selection_path=SELECTION_PATH, run=run_command, connect=None, fixed_mac=None):
         self.selection_path = Path(selection_path)
         self.run = run
         self.connect = connect
         self._scanned_devices = []
+        if fixed_mac is not None and not MAC.fullmatch(fixed_mac):
+            raise ValueError("invalid fixed Bluetooth address")
+        self.fixed_mac = fixed_mac.upper() if fixed_mac else None
+        if self.fixed_mac:
+            temporary = self.selection_path.with_suffix(".tmp")
+            temporary.write_text(self.fixed_mac + "\n")
+            os.replace(temporary, self.selection_path)
 
     def selected(self):
         try:
@@ -62,6 +69,8 @@ class BluetoothControl:
         return parse_devices(output)
 
     def scan(self):
+        if self.fixed_mac:
+            return [device for device in self.devices() if device["mac"] == self.fixed_mac]
         code, output = self.run(["bluetoothctl", "power", "on"])
         if code:
             raise RuntimeError("Could not power on Bluetooth: " + output.strip())
@@ -80,6 +89,10 @@ class BluetoothControl:
         if not isinstance(mac, str) or not MAC.fullmatch(mac):
             raise ValueError("invalid Bluetooth address")
         mac = mac.upper()
+        if self.fixed_mac:
+            if mac != self.fixed_mac:
+                raise ValueError("MaixCAM is bound to a fixed headset")
+            return self.status()
         if mac not in {item["mac"] for item in self._scanned_devices}:
             raise ValueError("device is not in the discovered list; scan again")
         if self.connect is not None and not self.connect(mac):
@@ -92,9 +105,10 @@ class BluetoothControl:
     def status(self):
         mac = self.selected()
         if not mac:
-            return {"selected": None, "connected": False}
+            return {"selected": None, "connected": False, "fixed": bool(self.fixed_mac)}
         code, output = self.run(["bluetoothctl", "info", mac])
-        return {"selected": mac, "connected": code == 0 and "Connected: yes" in output}
+        return {"selected": mac, "connected": code == 0 and "Connected: yes" in output,
+                "fixed": bool(self.fixed_mac)}
 
 
 def make_handler(control, token):

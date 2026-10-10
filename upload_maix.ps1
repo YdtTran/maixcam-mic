@@ -44,9 +44,10 @@ elseif ($Password) {
 
 $files = @(
     @{ Source = 'maix/rtsp_av.py'; Destination = 'rtsp_av.py' },
-    @{ Source = 'maix/soundpeats_auto.py'; Destination = 'soundpeats_auto.py' },
+    @{ Source = 'maix/bluetooth_audio.py'; Destination = 'bluetooth_audio.py' },
     @{ Source = 'maix/bluetooth_control.py'; Destination = 'bluetooth_control.py' },
-    @{ Source = 'maix/air6_mic_stream.py'; Destination = 'air6_mic_stream.py' },
+    @{ Source = 'maix/headset_mic_stream.py'; Destination = 'headset_mic_stream.py' },
+    @{ Source = 'pc/talkback_protocol.py'; Destination = 'talkback_protocol.py' },
     @{ Source = 'maix/talkback_receiver.py'; Destination = 'talkback_receiver.py' },
     @{ Source = 'maix/rtsp_app.yaml'; Destination = 'rtsp_app.yaml' },
     @{ Source = 'maix/background_services.rc.local'; Destination = 'background_services.rc.local' },
@@ -68,6 +69,16 @@ if ($LASTEXITCODE -ne 0) {
     }
     throw "Remote directory creation failed (plink exit code $LASTEXITCODE)."
 }
+
+# Back up every existing target before replacing any device file.
+$backupDir = "$RemoteDir/backup-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+$backupCommands = @("mkdir -p '$backupDir'", "chmod 700 '$backupDir'")
+foreach ($file in $files) {
+    $remoteFile = "$RemoteDir/$($file.Destination)"
+    $backupCommands += "if test -f '$remoteFile'; then cp -p '$remoteFile' '$backupDir/'; fi"
+}
+& plink @sshOptions $target ($backupCommands -join '; ')
+if ($LASTEXITCODE -ne 0) { throw 'Device backup failed; upload aborted.' }
 
 foreach ($file in $files) {
     $source = Join-Path $PSScriptRoot $file.Source

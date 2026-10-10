@@ -2,7 +2,7 @@ import unittest
 import tempfile
 import threading
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from pc.talkback import TalkbackRelay, make_packet
 from maix.talkback_receiver import TalkbackReceiver, valid_packet
@@ -14,7 +14,8 @@ class TalkbackTests(unittest.TestCase):
         spawn = Mock(return_value=process)
         receiver = TalkbackReceiver(b"a" * 16, spawn=spawn)
 
-        receiver._player()
+        with patch("maix.talkback_receiver.os.set_blocking", create=True):
+            receiver._player()
 
         self.assertEqual(spawn.call_args.kwargs["env"]["HOME"], "/root")
         self.assertEqual(spawn.call_args.args[0][-3:], ["8000", "-c", "1"])
@@ -23,11 +24,11 @@ class TalkbackTests(unittest.TestCase):
         udp = Mock()
         relay = TalkbackRelay(b"a" * 16, ("192.168.1.15", 9002), udp_socket=udp)
         relay.send_pcm(b"\x00\x01" * 1500)
-        self.assertEqual(udp.sendto.call_count, 3)
+        self.assertEqual(udp.sendto.call_count, 10)
         for call in udp.sendto.call_args_list:
             packet, target = call.args
             self.assertEqual(target, ("192.168.1.15", 9002))
-            self.assertLessEqual(len(packet), 1059)
+            self.assertLessEqual(len(packet), 360)
             self.assertIsNotNone(valid_packet(packet, b"a" * 16))
             self.assertIsNone(valid_packet(packet, b"b" * 16))
 

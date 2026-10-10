@@ -7,11 +7,16 @@ services:
     restart: unless-stopped
     init: true
     environment:
-      MTX_RTSPTRANSPORTS: tcp
+      MAIX_USB_IP: ${MAIX_USB_IP:-10.172.16.1}
+      MTX_RTSPTRANSPORTS: udp,tcp
+      RTSP_TRANSPORT: ${RTSP_TRANSPORT:-udp}
+      STREAM_MODE: ${STREAM_MODE:-combined}
       MTX_WEBRTCADDITIONALHOSTS: 127.0.0.1
-    command: ["python", "-u", "app.py", "--bind-host", "0.0.0.0", "--maix-ip", "${MAIX_IP:-10.127.15.230}"]
+    command: ["python", "-u", "app.py", "--bind-host", "0.0.0.0", "--maix-ip", "${MAIX_IP:-192.168.1.7}"]
     ports:
       - "8554:8554/tcp"
+      - "8002:8002/udp"
+      - "8003:8003/udp"
       - "127.0.0.1:8000:8000/tcp"
       - "127.0.0.1:8889:8889/tcp"
       - "127.0.0.1:8189:8189/udp"

@@ -8,26 +8,50 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from maix.bluetooth_control import BluetoothControl, make_handler as camera_handler, parse_devices
-from maix.air6_mic_stream import selected_mac
+from maix.headset_mic_stream import selected_mac
 from pc.bluetooth_client import CameraBluetoothClient
 from pc.operator_server import RecordingManager, make_handler as operator_handler
 
 
 class BluetoothControlTests(unittest.TestCase):
+    def test_fixed_binding_survives_restart_and_rejects_other_devices(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "selected"
+            control = BluetoothControl(path, fixed_mac="6c:16:29:7b:00:d4",
+                                       run=lambda *a, **k: (0, "Connected: no"))
+            self.assertEqual(BluetoothControl(path).selected(), "6C:16:29:7B:00:D4")
+            self.assertTrue(control.status()["fixed"])
+            with self.assertRaisesRegex(ValueError, "fixed headset"):
+                control.select("28:52:E0:16:73:CE")
+            self.assertEqual(control.select("6C:16:29:7B:00:D4")["selected"], control.fixed_mac)
+
+    def test_fixed_scan_does_not_discover_or_offer_other_headsets(self):
+        commands = []
+
+        def run(command, timeout=20):
+            commands.append(command)
+            return 0, "Device 6C:16:29:7B:00:D4 Earbuds\nDevice 28:52:E0:16:73:CE Other\n"
+
+        with tempfile.TemporaryDirectory() as directory:
+            control = BluetoothControl(Path(directory) / "selected", run=run,
+                                       fixed_mac="6C:16:29:7B:00:D4")
+            self.assertEqual(control.scan(), [{"mac": control.fixed_mac, "name": "Earbuds"}])
+            self.assertEqual(commands, [["bluetoothctl", "devices"]])
+
     def test_scan_lists_discovered_devices_and_selection_persists(self):
         commands = []
 
         def run(command, timeout=20):
             commands.append(command)
             if command[-1] == "devices":
-                return 0, "Device 28:52:E0:16:73:CE SOUNDPEATS Air6 HS\nDevice AA:BB:CC:DD:EE:FF Speaker\n"
+                return 0, "Device 28:52:E0:16:73:CE Bluetooth Headset\nDevice AA:BB:CC:DD:EE:FF Speaker\n"
             return 0, ""
 
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "selected"
             control = BluetoothControl(path, run=run)
             devices = control.scan()
-            self.assertEqual(devices[0]["name"], "SOUNDPEATS Air6 HS")
+            self.assertEqual(devices[0]["name"], "Bluetooth Headset")
             self.assertIn(["bluetoothctl", "--timeout", "15", "scan", "on"], commands)
             self.assertIn(["bluetoothctl", "scan", "off"], commands)
             control.select("aa:bb:cc:dd:ee:ff")

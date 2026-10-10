@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import threading
@@ -13,6 +14,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from .talkback import MAX_POST_BYTES, TalkbackRelay
+from .camera_diagnostics import CameraDiagnostics, DEFAULT_USB_IP, ipv4
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -22,7 +24,12 @@ RECORDING_ID = re.compile(r"^[0-9]{8}T[0-9]{6}Z_[0-9a-f]{8}$")
 
 
 class RecordingManager:
-    def __init__(self, directory=DEFAULT_RECORDINGS, source="rtsp://127.0.0.1:8554/maix01", spawn=subprocess.Popen):
+    def __init__(self, directory=DEFAULT_RECORDINGS, source="rtsp://127.0.0.1:8554/maix01", spawn=subprocess.Popen,
+                 transport="udp", mode="combined"):
+        if transport not in ("tcp", "udp") or mode not in ("video", "audio", "combined"):
+            raise ValueError("Invalid transport or stream mode")
+        self.transport = transport
+        self.mode = mode
         directory = Path(directory)
         self.directory = directory if directory.is_absolute() else PROJECT_ROOT / directory
         self.source = source
@@ -76,13 +83,14 @@ class RecordingManager:
             log = output.with_suffix(".ffmpeg.log").open("wb")
             command = [
                 "ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostats",
-                "-rtsp_transport", "tcp", "-analyzeduration", "10000000",
+                "-rtsp_transport", self.transport, "-analyzeduration", "10000000",
                 "-probesize", "20000000", "-i", self.source,
-                "-map", "0:v:0", "-map", "0:a:0", "-c:v", "copy",
-                "-bsf:v", "filter_units=remove_types=0",
-                "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
-                "-f", "mp4", str(output),
             ]
+            if self.mode != "audio":
+                command += ["-map", "0:v:0", "-c:v", "copy", "-bsf:v", "filter_units=remove_types=0"]
+            if self.mode != "video":
+                command += ["-map", "0:a:0", "-c:a", "aac", "-b:a", "128k"]
+            command += ["-movflags", "+faststart", "-f", "mp4", str(output)]
             try:
                 process = self.spawn(
                     command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
@@ -150,13 +158,8 @@ class RecordingManager:
             return recordings
 
 
-def make_handler(manager, html_path=APP_DIR / "operator_test.html", talkback=None, bluetooth=None):
+def make_handler(manager, html_path=APP_DIR / "operator_test.html", talkback=None, bluetooth=None, diagnostics=None):
     class Handler(BaseHTTPRequestHandler):
-        def log_message(self, format_string, *args):
-            if self.path.startswith("/api/talkback/audio"):
-                return
-            super().log_message(format_string, *args)
-
         def _json(self, code, payload):
             data = json.dumps(payload).encode("utf-8")
             self.send_response(code)
@@ -203,6 +206,10 @@ def make_handler(manager, html_path=APP_DIR / "operator_test.html", talkback=Non
 
         def do_GET(self):
             route = urlsplit(self.path).path
+            if route == "/api/camera/diagnostics":
+                if diagnostics is None:
+                    return self._json(503, {"error": "Camera diagnostics are not configured"})
+                return self._json(200, diagnostics.check())
             if route in ("/", "/operator_test.html"):
                 return self._file(Path(html_path), "text/html; charset=utf-8")
             if route == "/api/recordings/status":
@@ -210,7 +217,8 @@ def make_handler(manager, html_path=APP_DIR / "operator_test.html", talkback=Non
             if route == "/api/recordings":
                 return self._json(200, manager.list_recordings())
             if route == "/api/talkback/status":
-                return self._json(200, {"available": talkback is not None})
+                return self._json(200, {"available": talkback is not None, "transport": "webrtc",
+                                        "error": talkback.error if talkback else None})
             if route == "/api/bluetooth/status":
                 if bluetooth is None:
                     return self._json(503, {"error": "Bluetooth control is not configured"})
@@ -232,24 +240,28 @@ def make_handler(manager, html_path=APP_DIR / "operator_test.html", talkback=Non
             origin = self.headers.get("Origin")
             if origin and origin != "http://" + self.headers.get("Host", ""):
                 return self._json(403, {"error": "cross-origin control is blocked"})
-            if route == "/api/talkback/audio":
+            if route == "/api/talkback/offer":
                 if talkback is None:
                     return self._json(503, {"error": "talkback is not configured"})
                 try:
                     size = int(self.headers.get("Content-Length", "0"))
-                except ValueError:
-                    return self._json(400, {"error": "invalid content length"})
-                if size <= 0 or size > MAX_POST_BYTES:
-                    return self._json(400, {"error": "invalid audio size"})
-                try:
-                    talkback.send_pcm(self.rfile.read(size))
-                except ValueError as error:
+                    if size <= 0 or size > MAX_POST_BYTES:
+                        raise ValueError("invalid SDP size")
+                    sdp = self.rfile.read(size).decode("utf-8")
+                    return self._json(200, talkback.offer(sdp))
+                except (ValueError, UnicodeError) as error:
                     return self._json(400, {"error": str(error)})
-                return self._json(200, {"sent": True})
+                except RuntimeError as error:
+                    return self._json(409, {"error": str(error)})
+                except OSError:
+                    return self._json(503, {"error": "WebRTC relay is unavailable"})
             if route == "/api/talkback/stop":
                 if talkback is None:
                     return self._json(503, {"error": "talkback is not configured"})
-                talkback.stop()
+                session = self.headers.get("X-Talkback-Session")
+                if not session:
+                    return self._json(400, {"error": "talkback session is required"})
+                talkback.stop(session)
                 return self._json(200, {"stopped": True})
             if route in ("/api/bluetooth/scan", "/api/bluetooth/select"):
                 if bluetooth is None:
@@ -288,18 +300,22 @@ def main():
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--source", default="rtsp://127.0.0.1:8554/maix01")
     parser.add_argument("--recordings", type=Path, default=DEFAULT_RECORDINGS)
+    parser.add_argument("--rtsp-transport", choices=("tcp", "udp"), default=os.environ.get("RTSP_TRANSPORT", "udp"))
     parser.add_argument("--talkback-host", required=True, help="MaixCAM IP address for UDP talkback")
+    parser.add_argument("--maix-usb-ip", type=ipv4, default=os.environ.get("MAIX_USB_IP") or DEFAULT_USB_IP)
     parser.add_argument("--bind-host", default="127.0.0.1", help="Laptop IP address for the operator page")
     parser.add_argument("--talkback-token", type=Path, default=PROJECT_ROOT / ".talkback_token")
     args = parser.parse_args()
-    manager = RecordingManager(args.recordings, args.source)
+    manager = RecordingManager(args.recordings, args.source, transport=args.rtsp_transport)
     talkback = None
     if args.talkback_token.is_file():
         token = bytes.fromhex(args.talkback_token.read_text().strip())
-        talkback = TalkbackRelay(token, (args.talkback_host, 9002))
+        talkback = TalkbackRelay(token, (args.talkback_host, 9002), transport=args.rtsp_transport)
     from .bluetooth_client import CameraBluetoothClient
     bluetooth = CameraBluetoothClient(args.talkback_host, token.hex()) if talkback else None
-    server = ThreadingHTTPServer((args.bind_host, args.port), make_handler(manager, talkback=talkback, bluetooth=bluetooth))
+    server = ThreadingHTTPServer((args.bind_host, args.port), make_handler(
+        manager, talkback=talkback, bluetooth=bluetooth,
+        diagnostics=CameraDiagnostics(args.talkback_host, args.maix_usb_ip)))
     print(f"Operator UI: http://{args.bind_host}:{args.port}/operator_test.html", flush=True)
     try:
         server.serve_forever()
@@ -309,6 +325,8 @@ def main():
         if manager.status()["recording"]:
             manager.stop()
         server.server_close()
+        if talkback is not None:
+            talkback.close()
 
 
 if __name__ == "__main__":

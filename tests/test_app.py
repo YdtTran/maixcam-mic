@@ -17,6 +17,12 @@ def fake_media_executable():
 
 
 class AppTests(unittest.TestCase):
+    def test_direct_rtp_configuration_rejects_ports_without_a_valid_rtcp_pair(self):
+        for port in (1023, 8005, 65535):
+            with self.subTest(port=port), patch("sys.stderr"), self.assertRaises(SystemExit):
+                app.parse_args(["--headset-rtp-port", str(port)])
+        self.assertEqual(app.parse_args(["--headset-rtp-port", "8004"]).headset_rtp_port, 8004)
+
     def test_media_executable_matches_host_platform(self):
         self.assertEqual(app.media_executable("nt"), app.ROOT / "mediamtx.exe")
         self.assertEqual(app.media_executable("posix"), app.ROOT / "mediamtx")
@@ -46,7 +52,7 @@ class AppTests(unittest.TestCase):
     def test_publisher_reads_camera_and_publishes_to_local_relay(self):
         command = app.publisher_command("10.127.15.230", "ffmpeg")
         self.assertIn("rtsp://10.127.15.230:8554/live", command)
-        self.assertIn("rtsp://127.0.0.1:8554/air6mic", command)
+        self.assertIn("rtsp://127.0.0.1:8554/headsetmic", command)
         self.assertEqual(command[-1], "rtsp://127.0.0.1:8554/maix01")
         self.assertEqual(command[command.index("-map") + 3], "1:a:0")
         self.assertEqual(command[command.index("-bsf:v") + 1],
@@ -54,6 +60,19 @@ class AppTests(unittest.TestCase):
         self.assertEqual(command[command.index("-c:a") + 1], "libopus")
         self.assertNotIn("-rw_timeout", command)
         self.assertIn("nobuffer", command)
+
+    def test_stops_video_only_publisher_without_stopping_recorders(self):
+        publisher = app.publisher_command("192.168.1.7", "ffmpeg.exe", transport="tcp", mode="video")
+        processes = [
+            {"id": 201, "path": r"C:\tools\ffmpeg.exe", "command_line": " ".join(publisher)},
+            {"id": 202, "path": r"C:\tools\ffmpeg.exe", "command_line":
+             "ffmpeg -i rtsp://127.0.0.1:8554/maix01 recording.mp4"},
+            {"id": 203, "path": r"C:\tools\ffmpeg.exe", "command_line":
+             "ffmpeg -i rtsp://192.168.1.7:8554/live other.mp4"},
+        ]
+        stopped = []
+        app.stop_previous_host(processes, stopped.append)
+        self.assertEqual(stopped, [201])
 
     def test_stops_both_children_when_server_exits(self):
         relay = Mock()
@@ -95,7 +114,7 @@ class AppTests(unittest.TestCase):
                     stop_existing=lambda: None)
 
         self.assertEqual(spawn.call_count, 3)
-        self.assertEqual(wait_for_audio.call_count, 2)
+        self.assertEqual(wait_for_audio.call_count, 0)
         next_publisher.terminate.assert_called_once()
 
     def test_restarts_stalled_publisher_when_relay_path_disappears(self):

@@ -1,9 +1,10 @@
-"""Run on MaixCAM: connect the selected headset and route audio through BlueALSA."""
+"""Run on MaixCAM: reconnect the fixed headset and route audio through BlueALSA."""
 
 import argparse
 import os
 import re
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -13,7 +14,8 @@ except ImportError:  # Run directly on MaixCAM.
     from bluetooth_control import BluetoothControl, SELECTION_PATH, serve
 
 
-ROUTE_MARKER = "# managed by soundpeats_auto.py"
+ROUTE_MARKER = "# managed by bluetooth_audio.py"
+LEGACY_ROUTE_MARKER = "# managed by soundpeats_auto.py"
 
 
 def run_command(command, timeout=20):
@@ -25,7 +27,7 @@ def run_command(command, timeout=20):
         return 1, str(error)
 
 
-class SoundpeatsConnector:
+class BluetoothAudioConnector:
     def __init__(self, mac, run=run_command, spawn=subprocess.Popen, config_path=Path("/root/.asoundrc")):
         if not re.fullmatch(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", mac):
             raise ValueError("MAC must be six colon-separated hex pairs")
@@ -53,7 +55,7 @@ class SoundpeatsConnector:
             existing = self.config_path.read_text()
             if existing == config:
                 return
-            if not existing.startswith(ROUTE_MARKER):
+            if not existing.startswith((ROUTE_MARKER, LEGACY_ROUTE_MARKER)):
                 raise RuntimeError("existing ALSA config is not managed by this script")
         temporary = self.config_path.with_suffix(".tmp")
         temporary.write_text(config)
@@ -69,6 +71,10 @@ class SoundpeatsConnector:
             if code != 0:
                 print("Pairing pending:", output.strip(), flush=True)
                 return False
+        code, output = self.run(["bluetoothctl", "trust", self.mac])
+        if code != 0:
+            print("Headset trust pending:", output.strip(), flush=True)
+            return False
         if "Connected: yes" not in info:
             code, output = self.run(["bluetoothctl", "connect", self.mac], timeout=20)
             if code != 0:
@@ -78,31 +84,38 @@ class SoundpeatsConnector:
         return True
 
 
+def reconnect_headset(connector, stop, interval=5):
+    while not stop.is_set():
+        try:
+            connector.attempt()
+        except (OSError, RuntimeError) as error:
+            print("Headset reconnect pending:", error, flush=True)
+        if stop.wait(interval):
+            break
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--selection", type=Path, default=SELECTION_PATH)
+    parser.add_argument("--fixed-mac", help="Bluetooth address permanently assigned to this camera")
     parser.add_argument("--token", type=Path, default=Path("/root/.talkback_token"))
     args = parser.parse_args()
     token = args.token.read_text().strip()
     if len(bytes.fromhex(token)) != 16:
         raise ValueError("control token must contain 32 hex digits")
-    legacy_mac = BluetoothControl(Path("/root/.bluetooth_device")).selected()
-    if legacy_mac:
-        run_command(["bluetoothctl", "untrust", legacy_mac])
-        run_command(["bluetoothctl", "disconnect", legacy_mac])
-    control = None
-
-    def connect(mac):
-        previous = control.selected()
-        if not SoundpeatsConnector(mac).attempt():
-            return False
-        if previous and previous != mac:
-            run_command(["bluetoothctl", "disconnect", previous])
-        print(f"Bluetooth {mac} connected by operator selection", flush=True)
-        return True
-
-    control = BluetoothControl(args.selection, connect=connect)
-    serve(control, token)
+    mac = args.fixed_mac or BluetoothControl(args.selection).selected()
+    if not mac:
+        parser.error("set --fixed-mac once to bind this camera to its headset")
+    control = BluetoothControl(args.selection, fixed_mac=mac)
+    connector = BluetoothAudioConnector(control.fixed_mac)
+    stop = threading.Event()
+    reconnect = threading.Thread(target=reconnect_headset, args=(connector, stop), daemon=True)
+    reconnect.start()
+    try:
+        serve(control, token)
+    finally:
+        stop.set()
+        reconnect.join(timeout=2)
 
 
 if __name__ == "__main__":
