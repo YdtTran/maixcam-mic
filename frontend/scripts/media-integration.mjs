@@ -34,6 +34,19 @@ try {
     throw error;
   }
   await page.waitForFunction(() => document.querySelector('video')?.videoWidth > 0);
+  if (process.env.ASSERT_RETURN_AUDIO === '1') {
+    await page.getByRole('button', { name: 'Enable audio', exact: true }).click();
+    await expect(page.locator('audio')).toHaveAttribute('data-media-transport', 'udp', { timeout: 20000 });
+    await expect.poll(() => page.evaluate(async () => {
+      for (const peer of window.measurePeers) {
+        const stats = await peer.getStats();
+        for (const report of stats.values()) {
+          if (report.type === 'inbound-rtp' && report.kind === 'audio' && report.bytesReceived > 1000) return true;
+        }
+      }
+      return false;
+    })).toBe(true);
+  }
   const talk = page.getByRole('button', { name: 'Talk', exact: true });
   await talk.focus();
   await page.keyboard.down('Space');
@@ -45,6 +58,7 @@ try {
   if (!(await stopped).ok()) throw new Error('Talkback stop failed');
   await expect(talk).toBeVisible();
   console.log('Real WHEP decoded H264 video; selected ICE transport UDP; WHIP talkback stopped');
+  if (process.env.ASSERT_RETURN_AUDIO === '1') console.log('Independent PCMU WHEP audio received in Chromium');
 } finally {
   await browser.close();
 }

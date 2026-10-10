@@ -35,8 +35,9 @@ export class LiveStream {
   private retry: ReturnType<typeof setTimeout> | null = null;
   private active = false;
   constructor(
-    private video: HTMLVideoElement,
+    private video: HTMLMediaElement,
     private status: (state: string) => void,
+    private tracks: ("video" | "audio")[] = ["video", "audio"],
   ) {}
   async start(url: string) {
     this.active = true;
@@ -46,8 +47,7 @@ export class LiveStream {
     const stream = new MediaStream();
     this.video.srcObject = stream;
     this.status("Connecting");
-    peer.addTransceiver("video", { direction: "recvonly" });
-    peer.addTransceiver("audio", { direction: "recvonly" });
+    this.tracks.forEach((kind) => peer.addTransceiver(kind, { direction: "recvonly" }));
     peer.ontrack = (event) => {
       if (this.peer !== peer) return;
       stream.addTrack(event.track);
@@ -59,7 +59,11 @@ export class LiveStream {
       if (this.peer !== peer) return;
       if (peer.connectionState === "connected") {
         void selectedIceTransport(peer).then(() => {
-          if (this.peer === peer) { this.video.dataset.mediaTransport = "udp"; this.status("Online"); }
+          if (this.peer === peer) {
+            this.video.dataset.mediaTransport = "udp";
+            this.status("Online");
+            void this.video.play().catch(() => this.status("Click Enable audio to play"));
+          }
         }).catch((error) => { this.status(error.message); this.reconnect(url); });
       } else if (["failed", "disconnected"].includes(peer.connectionState)) {
         this.status("Offline"); this.reconnect(url);
@@ -94,12 +98,17 @@ export class LiveStream {
       if (!response.ok)
         throw new Error(`Camera stream unavailable (${response.status}).`);
       const locationHeader = response.headers.get("Location");
-      if (locationHeader) this.session = new URL(locationHeader, url).href;
+      const session = locationHeader ? new URL(locationHeader, url).href : null;
+      if (this.peer !== peer) {
+        if (session) void fetch(session, { method: "DELETE", keepalive: true }).catch(() => {});
+        return;
+      }
+      this.session = session;
       const sdp = await response.text();
       if (this.peer !== peer) return;
       await peer.setRemoteDescription({ type: "answer", sdp });
     } catch (error) {
-      if (this.abort.signal.aborted) return;
+      if (this.peer !== peer || this.abort.signal.aborted) return;
       this.status(
         error instanceof Error ? error.message : "Camera stream unavailable",
       );

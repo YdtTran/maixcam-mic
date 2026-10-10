@@ -94,18 +94,25 @@ def publish_audio(target, selection_path=SELECTION_PATH, pause_path=PAUSE_PATH, 
             else:
                 ack_path.unlink(missing_ok=True)
                 if active_mac and capture is None and now >= retry_capture_at:
-                    capture = subprocess.Popen(capture_command(active_mac), stdout=subprocess.PIPE,
-                                               stderr=subprocess.DEVNULL, bufsize=0,
-                                               env={**os.environ, "HOME": "/root"})
-                    os.set_blocking(capture.stdout.fileno(), False)
                     retry_capture_at = now + 3
+                    try:
+                        capture = subprocess.Popen(capture_command(active_mac), stdout=subprocess.PIPE,
+                                                   bufsize=0, env={**os.environ, "HOME": "/root"})
+                        os.set_blocking(capture.stdout.fileno(), False)
+                        print("Headset SCO capture started (packets may still contain silence)", flush=True)
+                    except OSError as error:
+                        stop_process(capture)
+                        capture = None
+                        print(f"Headset SCO capture unavailable: {error}; sending silence", flush=True)
 
             frame = SILENCE
             if capture is not None:
                 if capture.poll() is not None:
+                    print(f"Headset capture exited ({capture.returncode}); retrying SCO in 3s", flush=True)
                     stop_process(capture)
                     capture = None
                     pending.clear()
+                    retry_capture_at = now + 3
                 else:
                     try:
                         chunk = os.read(capture.stdout.fileno(), FRAME_BYTES * 16)

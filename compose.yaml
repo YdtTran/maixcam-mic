@@ -11,12 +11,15 @@ services:
       MTX_RTSPTRANSPORTS: udp,tcp
       RTSP_TRANSPORT: ${RTSP_TRANSPORT:-udp}
       STREAM_MODE: ${STREAM_MODE:-combined}
+      RETURN_AUDIO_PORT: ${RETURN_AUDIO_PORT:-}
       MTX_WEBRTCADDITIONALHOSTS: 127.0.0.1
     command: ["python", "-u", "app.py", "--bind-host", "0.0.0.0", "--maix-ip", "${MAIX_IP:-192.168.1.7}"]
     ports:
       - "8554:8554/tcp"
       - "8002:8002/udp"
       - "8003:8003/udp"
+      - "8004:8004/udp"
+      - "8005:8005/udp"
       - "127.0.0.1:8000:8000/tcp"
       - "127.0.0.1:8889:8889/tcp"
       - "127.0.0.1:8189:8189/udp"

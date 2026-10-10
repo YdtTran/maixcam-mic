@@ -66,12 +66,15 @@ function App() {
   const [headset, setHeadset] = useState<BluetoothStatus | null>(null);
   const [talkAvailable, setTalkAvailable] = useState(false);
   const [streamState, setStreamState] = useState("Connecting");
+  const [micState, setMicState] = useState("Connecting");
+  const [micRetry, setMicRetry] = useState(0);
   const [time, setTime] = useState(new Date());
   const [retry, setRetry] = useState(0);
   const [muted, setMuted] = useState(true);
   const [userMenu, setUserMenu] = useState(false);
   const [notifications, setNotifications] = useState(false);
   const video = useRef<HTMLVideoElement>(null);
+  const returnAudio = useRef<HTMLAudioElement>(null);
   const videoCard = useRef<HTMLDivElement>(null);
   const talkback = useRef<Talkback | null>(null);
   const talkPending = useRef(false);
@@ -156,6 +159,15 @@ function App() {
     void reader.start(preferences.whep);
     return () => reader.stop();
   }, [signedIn, selectedId, page, preferences.whep, retry, workers.length]);
+
+  useEffect(() => {
+    if (!signedIn || !real || page !== "Live Workers" || !returnAudio.current) return;
+    const reader = new LiveStream(returnAudio.current, setMicState, ["audio"]);
+    const url = new URL(preferences.whep);
+    url.pathname = "/headsetmic/whep";
+    void reader.start(url.href);
+    return () => reader.stop();
+  }, [signedIn, selectedId, page, preferences.whep, micRetry, workers.length]);
 
   async function stopTalk() {
     talkPending.current = false;
@@ -459,11 +471,12 @@ function App() {
                         autoPlay
                         playsInline
                         loop={!real}
-                        muted={muted}
+                        muted={real || muted}
                         onError={() => {
                           if (!real) setStreamState("Demo video unavailable");
                         }}
                       />
+                      {real && <audio ref={returnAudio} autoPlay muted={muted} />}
                       {!online || streamState === "Demo video unavailable" ? (
                         <div className="video-empty">
                           <VideoOff size={38} />
@@ -510,7 +523,9 @@ function App() {
                       className="text-button"
                       onClick={() => {
                         setMuted(!muted);
-                        void video.current
+                        const element = real ? returnAudio.current : video.current;
+                        if (element) element.muted = !muted;
+                        void element
                           ?.play()
                           .catch((error) => setNotice(message(error)));
                       }}
@@ -519,6 +534,12 @@ function App() {
                       {muted ? "Enable audio" : "Mute audio"}
                     </button>
                   </div>
+                  {real && <div className="video-caption">
+                    <span>Earbuds microphone: {micState}{muted ? " · Muted" : ""}</span>
+                    <button className="text-button" onClick={() => setMicRetry((value) => value + 1)}>
+                      <RefreshCw size={16} /> Reconnect microphone
+                    </button>
+                  </div>}
                 </section>
                 <aside className="status-column">
                   <section className="card">

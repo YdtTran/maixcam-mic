@@ -27,7 +27,8 @@ def valid_packet(packet, token):
 
 class TalkbackReceiver:
     def __init__(self, token, bind=("0.0.0.0", 9002), spawn=subprocess.Popen,
-                 pause_path=PAUSE_PATH, ack_path=ACK_PATH):
+                 pause_path=PAUSE_PATH, ack_path=ACK_PATH, duplex=False):
+        self.duplex = duplex
         self.jitter = JitterBuffer()
         self.lock = threading.Lock()
         self.retired = collections.deque(maxlen=64)
@@ -42,6 +43,8 @@ class TalkbackReceiver:
         self.ack_path = Path(ack_path)
 
     def _pause_mic(self):
+        if self.duplex:
+            return
         if self.pause_path.exists():
             return
         self.ack_path.unlink(missing_ok=True)
@@ -164,11 +167,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--token", type=Path, default=Path("/root/.talkback_token"))
     parser.add_argument("--port", type=int, default=9002)
+    parser.add_argument("--duplex", action="store_true",
+                        help="Keep SCO capture open; requires SCO bt_output and verified hardware duplex")
     args = parser.parse_args()
     token = bytes.fromhex(args.token.read_text().strip())
     if len(token) != 16:
         raise ValueError("talkback token must contain 32 hex digits")
-    TalkbackReceiver(token, bind=("0.0.0.0", args.port)).serve()
+    TalkbackReceiver(token, bind=("0.0.0.0", args.port), duplex=args.duplex).serve()
 
 
 if __name__ == "__main__":

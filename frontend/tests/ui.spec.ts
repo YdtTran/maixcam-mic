@@ -12,7 +12,8 @@ async function setup(page: Page, fixed = false) {
       connectionState = "new";
       localDescription = { sdp: "test offer" };
       onconnectionstatechange: (() => void) | null = null;
-      addTransceiver() {}
+      tracks: string[] = [];
+      addTransceiver(kind: string) { this.tracks.push(kind); }
       addTrack() {}
       getStats() {
         return Promise.resolve(new Map([
@@ -45,6 +46,9 @@ async function setup(page: Page, fixed = false) {
       body: "test answer",
     }),
   );
+  await page.route("**/headsetmic/whep", (route) => route.fulfill({
+    status: 201, contentType: "application/sdp", body: "test answer",
+  }));
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     requests.push(path);
@@ -100,6 +104,31 @@ async function login(page: Page) {
     page.getByRole("heading", { name: "Live Workers" }),
   ).toBeVisible();
 }
+
+test("microphone loss and reconnect leave video connected; audio is enabled by interaction", async ({ page }) => {
+  await setup(page);
+  let failMic = true;
+  let posts = 0;
+  await page.route("**/headsetmic/whep", (route) => {
+    posts++;
+    return route.fulfill({ status: failMic ? 404 : 201, contentType: "application/sdp", body: "test answer" });
+  });
+  await login(page);
+  await expect(page.locator("video").first()).toHaveAttribute("data-media-transport", "udp");
+  await expect(page.getByText(/Earbuds microphone: Camera stream unavailable/)).toBeVisible();
+  await page.getByRole("button", { name: "Enable audio", exact: true }).click();
+  await expect.poll(() => page.locator("audio").evaluate((audio: HTMLAudioElement) => audio.muted)).toBe(false);
+  failMic = false;
+  await page.getByRole("button", { name: "Reconnect microphone", exact: true }).click();
+  await expect(page.locator("audio")).toHaveAttribute("data-media-transport", "udp");
+  await expect(page.locator("video").first()).toHaveAttribute("data-media-transport", "udp");
+  await page.getByRole("button", { name: "Mute audio", exact: true }).click();
+  await expect.poll(() => page.locator("audio").evaluate((audio: HTMLAudioElement) => audio.muted)).toBe(true);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const stoppedAt = posts;
+  await page.waitForTimeout(2200);
+  expect(posts).toBe(stoppedAt);
+});
 
 test("login validation, navigation, session refresh and logout", async ({
   page,
@@ -285,8 +314,8 @@ test("playback retries a disconnected UDP peer", async ({ page }) => {
   await login(page);
   await expect(page.locator(".live-badge")).toHaveText("● LIVE");
   await page.evaluate(() => {
-    const Peer = window.RTCPeerConnection as unknown as { instances: { connectionState: string; onconnectionstatechange: () => void }[] };
-    const peer = Peer.instances.at(-1)!;
+    const Peer = window.RTCPeerConnection as unknown as { instances: { tracks: string[]; connectionState: string; onconnectionstatechange: () => void }[] };
+    const peer = Peer.instances.find((item) => item.tracks.includes("video"))!;
     peer.connectionState = "failed";
     peer.onconnectionstatechange();
   });

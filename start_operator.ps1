@@ -3,7 +3,8 @@ param(
     [switch]$Build,
     [string]$MaixIp,
     [ValidateSet('tcp', 'udp')][string]$Transport,
-    [ValidateSet('video', 'audio', 'combined')][string]$StreamMode
+    [ValidateSet('video', 'audio', 'combined')][string]$StreamMode,
+    [int]$ReturnAudioPort = 8004
 )
 
 $ErrorActionPreference = 'Stop'
@@ -30,7 +31,10 @@ try {
         throw 'Invalid RTSP_TRANSPORT or STREAM_MODE in .env.'
     }
     if ($StreamMode -ne 'video') {
-        throw 'This startup helper preserves video-only operation. Earbuds audio remains pending; use app.py explicitly for audio experiments.'
+        throw 'This startup helper preserves video-only operation. Use app.py explicitly for combined-stream experiments.'
+    }
+    if ($ReturnAudioPort -ne 0 -and ($ReturnAudioPort -lt 1024 -or $ReturnAudioPort -gt 65534 -or $ReturnAudioPort % 2 -ne 0)) {
+        throw 'ReturnAudioPort must be 0 (disabled) or an even port from 1024 to 65534.'
     }
     $operatorPython = (Get-Command python -ErrorAction Stop).Source
     Get-Command ffmpeg -ErrorAction Stop | Out-Null
@@ -90,6 +94,11 @@ try {
                     throw 'The running operator uses different settings. Stop it with .\stop_operator.ps1 before restarting.'
                 }
             }
+            $operatorReturnEnabled = $operatorCommand.Contains("--return-audio-port $ReturnAudioPort")
+            if (($ReturnAudioPort -gt 0 -and -not $operatorReturnEnabled) -or
+                ($ReturnAudioPort -eq 0 -and $operatorCommand.Contains('--return-audio-port'))) {
+                throw 'The running operator uses different return-audio settings. Stop it with .\stop_operator.ps1 before restarting.'
+            }
         }
         $operatorResponse = Invoke-WebRequest -UseBasicParsing -Uri $operatorUrl -TimeoutSec 5
         if ($operatorResponse.StatusCode -ne 200) { throw 'The running operator failed its HTTP check.' }
@@ -97,10 +106,12 @@ try {
         return
     }
 
-    $operatorProcess = Start-Process -FilePath $operatorPython -ArgumentList @(
+    $operatorArguments = @(
         '-u', ('"' + (Join-Path $PSScriptRoot 'app.py') + '"'),
         '--maix-ip', $MaixIp, '--rtsp-transport', $Transport, '--stream-mode', $StreamMode
-    ) -WorkingDirectory $PSScriptRoot -WindowStyle Hidden -PassThru `
+    )
+    if ($ReturnAudioPort -gt 0) { $operatorArguments += @('--return-audio-port', $ReturnAudioPort) }
+    $operatorProcess = Start-Process -FilePath $operatorPython -ArgumentList $operatorArguments -WorkingDirectory $PSScriptRoot -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $PSScriptRoot '.runtime/operator-native.stdout.log') `
         -RedirectStandardError (Join-Path $PSScriptRoot '.runtime/operator-native.stderr.log')
     $operatorProcess.Id | Set-Content .runtime/operator-native.pid

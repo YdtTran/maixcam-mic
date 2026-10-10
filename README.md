@@ -1,6 +1,6 @@
 # WorkerCam Admin / MaixCAM RTSP operator
 
-This project relays MaixCAM video and PC talkback to a local web operator page. Earbuds → MaixCAM → PC microphone audio remains unimplemented end to end. The PC side runs MediaMTX, FFmpeg, recording, and the operator server, either natively on Windows or in a Linux container. MaixCAM keeps its camera and Bluetooth programs on the physical device.
+This project relays MaixCAM video, PC talkback, and independent earbuds microphone return to a local web operator page. Microphone return is implemented and tested with synthetic media; physical earbuds capture and duplex validation remain pending. The PC side runs MediaMTX, FFmpeg, recording, and the operator server, either natively on Windows or in a Linux container. MaixCAM keeps its camera and Bluetooth programs on the physical device.
 
 The operator page is now a React/TypeScript WorkerCam Admin interface with Live Workers, Recordings, and Settings. Sign in with `admin` / `admin`. Worker #07 connects to the physical camera; Worker #12 is a local demo. Login and the generic worker database are frontend prototypes (sessionStorage and IndexedDB); server authentication and database APIs remain future backend work. See [frontend/README.md](frontend/README.md) for development, data boundaries, and API integration.
 
@@ -141,10 +141,11 @@ The publisher and recorder remove empty H.264 NAL units emitted by this MaixCAM.
 
 ## MaixCAM program
 
-The microphone behavior described below reflects existing code and earlier
-deployment experiments. Earbuds → MaixCAM → PC audio remains unimplemented
-end to end according to the latest user status. Keep current camera video and
-talkback services; do not redeploy them just to open the operator page.
+The microphone behavior described below reflects the legacy A2DP/pause defaults
+and earlier deployment experiments. Independent microphone return is now
+implemented; physical deployment and SCO duplex validation remain pending.
+Follow [the return guide](docs/headset-return-audio.md) for the direct RTP route
+and optional duplex settings. Keep current camera video services.
 
 `maix/rtsp_av.py` supplies 640 × 480 camera video to the PC publisher; it does not capture the built-in microphone. `maix/headset_mic_stream.py` captures the selected headset's microphone through BlueALSA and publishes it to `rtsp://192.168.1.4:8554/headsetmic`. If the laptop IP changes, update `--target` in `maix/background_services.rc.local` and reinstall that boot script. The headset microphone must support the 8 kHz hands-free profile and stereo playback. While Hold to Talk is pressed, MaixCAM pauses headset mic capture, plays PC audio through its stereo profile, and publishes silence on `/headsetmic` so the video stream stays live. Headset mic capture resumes on release.
 
@@ -200,3 +201,12 @@ replacing the running stack. Use `--stream-mode video|audio|combined` for isolat
 inputs. The camera headset publisher must use the matching transport; direct
 RTP audio remains UDP. Browser WebRTC and sequenced-UDP talkback are preserved.
 See [configuration and measurement instructions](docs/rtsp-transport.md).
+
+## Earbuds microphone return
+
+The independent return-audio implementation and hardware test/deployment commands
+are in [the headset return guide](docs/headset-return-audio.md). The native helper
+now enables a separate PCMU receiver on UDP 8004; `/maix01` and recordings stay
+video-only. Use `-ReturnAudioPort 0` for a video-only baseline. The default camera
+talkback still pauses microphone capture; simultaneous speech requires verified
+SCO duplex and the explicit camera options described in that guide.

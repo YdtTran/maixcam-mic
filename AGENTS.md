@@ -1,11 +1,36 @@
 # Project Brain and Index
 
 Read this file first when resuming work. It records current decisions and points
-to detailed evidence; session logs preserve the history. Last updated: 2026-10-10.
+to detailed evidence; session logs preserve the history. Last updated: 2026-10-11.
 
 ## Current State and User Decisions
 
-- **Latest runtime (2026-10-10, approximately 19:19):** Docker Desktop restart
+- **User acceptance (2026-10-11):** The user reports that latency is great after
+  direct deployment and requested committing this implementation before further
+  work. Preserve TCP/video plus independent PCMU return on UDP8004. This is user
+  feedback, not a numeric physical measurement or confirmation of SCO duplex.
+
+- **Direct deployment (2026-10-10, approximately 23:57):** Native Windows app
+  PID16660 runs TCP/video with independent return on UDP8004. Existing camera
+  RTP sender feeds `/headsetmic`; real Chromium decoded H.264 and received PCMU,
+  audio element unmuted/playing. Six-second input level was very quiet (mean
+  -76.3dB, peak -50dB), so intelligible earbuds speech remains unverified.
+  Talkback status reports available. SSH root authentication failed twice,
+  including the requested retry, so camera files/profiles were not changed;
+  SCO duplex remains pending and legacy talkback pauses capture. See deployment log.
+
+- **Headset return implementation (2026-10-10, approximately 23:50):** An independent
+  PCMU RTP receiver and browser `/headsetmic` WHEP audio are implemented. Native
+  `start_operator.ps1` enables UDP8004 return by default (`-ReturnAudioPort 0`
+  disables it); video/recordings remain video-only. Synthetic real Chromium
+  media and regression checks passed; physical headset capture/duplex and latency
+  remain unverified because SSH authentication was unavailable. Production
+  processes were not restarted. Final HTTP8000 check was refused and no
+  MediaMTX/FFmpeg processes were present at that check, before direct deployment.
+  Default camera A2DP talkback still pauses capture;
+  explicit SCO/duplex options need hardware validation. See the return guide/log.
+
+- **Earlier runtime (2026-10-10, approximately 19:19):** Docker Desktop restart
   did not restore Windows access to the host-network operator listeners. The
   operator container is stopped; a hidden native Windows `app.py` process now
   runs with explicit `--maix-ip 192.168.1.7 --rtsp-transport tcp --stream-mode
@@ -15,7 +40,7 @@ to detailed evidence; session logs preserve the history. Last updated: 2026-10-1
   `.runtime/operator-native.*`. ThingsBoard and PostgreSQL were restarted and
   are running (PostgreSQL healthy). Stop native services before starting the
   operator container again; Docker localhost forwarding remains unresolved.
-- **Latest user status (2026-10-10):** Video and PC-to-camera talkback latency
+- **Earlier user status (2026-10-10):** Video and PC-to-camera talkback latency
   are acceptable. Earbuds → MaixCAM → PC microphone audio remains unimplemented
   end to end. Existing microphone service/code must not be treated as completion
   of that path. Preserve the accepted video and talkback operation.
@@ -50,6 +75,10 @@ to detailed evidence; session logs preserve the history. Last updated: 2026-10-1
 | [2026-10-10 session log](docs/sessions/2026-10-10-rtsp-latency.md) | Investigation history, final user decision and next steps |
 | [UDP protocol/deployment history](docs/udp-media.md) | Earlier UDP validation, protocol details and fallback |
 | [Frontend guide](frontend/README.md) | UI development, API and persistence boundaries |
+| [Headset return guide](docs/headset-return-audio.md) | Independent microphone return, duplex prerequisites, exact device/Windows commands and pending hardware checks |
+| [Headset implementation log](docs/sessions/2026-10-10-headset-return.md) | Code changes, synthetic verification and unchanged live runtime |
+| [Headset deployment log](docs/sessions/2026-10-10-headset-deployment.md) | Active native runtime, real camera RTP/browser delivery and remaining SSH/duplex limitation |
+| [Headset acceptance log](docs/sessions/2026-10-11-headset-acceptance.md) | User latency feedback and implementation commit scope |
 
 ## Findings and Open Questions
 

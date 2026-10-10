@@ -28,7 +28,11 @@ def run_command(command, timeout=20):
 
 
 class BluetoothAudioConnector:
-    def __init__(self, mac, run=run_command, spawn=subprocess.Popen, config_path=Path("/root/.asoundrc")):
+    def __init__(self, mac, run=run_command, spawn=subprocess.Popen, config_path=Path("/root/.asoundrc"),
+                 playback_profile="a2dp"):
+        if playback_profile not in ("a2dp", "sco"):
+            raise ValueError("playback profile must be a2dp or sco")
+        self.playback_profile = playback_profile
         if not re.fullmatch(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", mac):
             raise ValueError("MAC must be six colon-separated hex pairs")
         self.mac = mac.upper()
@@ -45,9 +49,10 @@ class BluetoothAudioConnector:
             time.sleep(1)
 
     def _route_playback(self):
+        rate, channels = (8000, 1) if self.playback_profile == "sco" else (48000, 2)
         config = (
             ROUTE_MARKER + "\n"
-            + 'pcm.bt_output { type plug slave { pcm { type bluealsa device "' + self.mac + '" profile "a2dp" } rate 48000 channels 2 } }\n'
+            + f'pcm.bt_output {{ type plug slave {{ pcm {{ type bluealsa device "{self.mac}" profile "{self.playback_profile}" }} rate {rate} channels {channels} }} }}\n'
             + 'pcm.bt_input { type plug slave { pcm { type bluealsa device "' + self.mac + '" profile "sco" } rate 8000 channels 1 } }\n'
             + 'pcm.!default { type asym playback.pcm "bt_output" capture.pcm "bt_input" }\n'
         )
@@ -98,6 +103,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--selection", type=Path, default=SELECTION_PATH)
     parser.add_argument("--fixed-mac", help="Bluetooth address permanently assigned to this camera")
+    parser.add_argument("--playback-profile", choices=("a2dp", "sco"), default="a2dp")
     parser.add_argument("--token", type=Path, default=Path("/root/.talkback_token"))
     args = parser.parse_args()
     token = args.token.read_text().strip()
@@ -107,7 +113,8 @@ def main():
     if not mac:
         parser.error("set --fixed-mac once to bind this camera to its headset")
     control = BluetoothControl(args.selection, fixed_mac=mac)
-    connector = BluetoothAudioConnector(control.fixed_mac)
+    connector = (BluetoothAudioConnector(control.fixed_mac, playback_profile="sco")
+                 if args.playback_profile == "sco" else BluetoothAudioConnector(control.fixed_mac))
     stop = threading.Event()
     reconnect = threading.Thread(target=reconnect_headset, args=(connector, stop), daemon=True)
     reconnect.start()

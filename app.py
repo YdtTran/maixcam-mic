@@ -15,6 +15,7 @@ from pathlib import Path
 from pc.operator_server import RecordingManager, make_handler
 from pc.bluetooth_client import CameraBluetoothClient
 from pc.talkback import TalkbackRelay
+from pc.headset_return import HeadsetReturn
 from pc.camera_diagnostics import CameraDiagnostics, DEFAULT_USB_IP, ipv4
 from pc.check_camera_udp import check_camera
 
@@ -83,7 +84,10 @@ def stop_previous_host(processes, terminate_pid, current_pid=None, operator_pids
                            and Path(path).name.lower() in ("python.exe", "pythonw.exe")
                            and (re.search(r"(?i)(?:^|[\\/\s])app\.py(?=[\"'\s]|$)", command)
                                 or ("pc.operator_server" in command and "/maix01" in command)))
-        if is_own_media or is_own_publisher or is_own_operator:
+        is_own_return = (Path(path).name.lower() == "ffmpeg.exe"
+                         and str(ROOT / ".runtime" / "headset-return.sdp") in command
+                         and "rtsp://127.0.0.1:8554/headsetmic" in command)
+        if is_own_media or is_own_publisher or is_own_operator or is_own_return:
             terminate_pid(pid)
             stopped.append(pid)
     return stopped
@@ -113,7 +117,14 @@ def parse_args(argv=None):
                         default=os.environ.get("STREAM_MODE", "combined"))
     parser.add_argument("--headset-rtp-port", type=int, default=os.environ.get("HEADSET_RTP_PORT") or None,
                         help="Receive direct G.711 RTP/UDP instead of /headsetmic")
+    parser.add_argument("--return-audio-port", type=int, default=os.environ.get("RETURN_AUDIO_PORT") or None,
+                        help="Independent PCMU RTP receiver for /headsetmic (video mode only)")
     args = parser.parse_args(argv)
+    if args.return_audio_port is not None:
+        if args.stream_mode != "video":
+            parser.error("Independent return audio requires --stream-mode video")
+        if not (1024 <= args.return_audio_port <= 65534 and args.return_audio_port % 2 == 0):
+            parser.error("--return-audio-port must be an even port from 1024 to 65534")
     if args.rtsp_transport not in ("tcp", "udp") or args.stream_mode not in ("video", "audio", "combined"):
         parser.error("Invalid RTSP_TRANSPORT or STREAM_MODE")
     if args.rtsp_transport == "tcp" and args.headset_rtp_port and args.stream_mode != "video":
@@ -246,7 +257,7 @@ def run(args, spawn=subprocess.Popen, server_factory=ThreadingHTTPServer,
         talkback = TalkbackRelay(token, (args.maix_ip, 9002), transport=args.rtsp_transport)
         bluetooth = CameraBluetoothClient(args.maix_ip, token.hex())
 
-    relay = publisher = server = None
+    relay = publisher = server = return_audio = None
     manager = RecordingManager(args.recordings, transport=args.rtsp_transport, mode=args.stream_mode)
     audio_sdp = None
     if args.headset_rtp_port:
@@ -261,6 +272,12 @@ def run(args, spawn=subprocess.Popen, server_factory=ThreadingHTTPServer,
         command = publisher_command(args.maix_ip, audio_sdp=audio_sdp,
                                     transport=args.rtsp_transport, mode=args.stream_mode)
         publisher = spawn(command, cwd=ROOT)
+        if args.return_audio_port:
+            runtime = ROOT / ".runtime"
+            runtime.mkdir(exist_ok=True)
+            return_sdp = runtime / "headset-return.sdp"
+            return_sdp.write_text(headset_sdp(args.return_audio_port), encoding="ascii", newline="")
+            return_audio = HeadsetReturn(return_sdp, runtime, spawn=spawn, available=path_available)
         publisher_started = time.monotonic()
         next_retry_at = publisher_started
         last_health_check = publisher_started
@@ -286,6 +303,8 @@ def run(args, spawn=subprocess.Popen, server_factory=ThreadingHTTPServer,
                     next_retry_at = publisher_started + 2
                     last_health_check = publisher_started
                 server.handle_request()
+                if return_audio is not None:
+                    return_audio.tick()
         except KeyboardInterrupt:
             pass
     finally:
@@ -296,6 +315,8 @@ def run(args, spawn=subprocess.Popen, server_factory=ThreadingHTTPServer,
             if server is not None:
                 server.server_close()
             stop_process(publisher)
+            if return_audio is not None:
+                return_audio.close()
             stop_process(relay)
             if talkback is not None:
                 talkback.close()
