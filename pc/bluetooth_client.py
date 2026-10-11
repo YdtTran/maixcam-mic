@@ -1,6 +1,7 @@
 """PC-side client for the MaixCAM Bluetooth control endpoint."""
 
 import json
+import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -12,10 +13,10 @@ class CameraBluetoothClient:
         self.open_url = open_url
 
     def request(self, action, mac=None):
-        if action not in ("status", "scan", "select"):
+        if action not in ("status", "clock", "scan", "select"):
             raise ValueError("unsupported Bluetooth action")
         body = json.dumps({"mac": mac}).encode() if action == "select" else None
-        method = "GET" if action == "status" else "POST"
+        method = "GET" if action in ("status", "clock") else "POST"
         request = Request(self.base + "/" + action, data=body, method=method,
                           headers={"X-Control-Token": self.token,
                                    "Content-Type": "application/json"})
@@ -30,3 +31,19 @@ class CameraBluetoothClient:
                 return error.code, {"error": "camera rejected Bluetooth request"}
         except (OSError, URLError) as error:
             return 503, {"error": f"camera Bluetooth service unavailable: {error}"}
+
+    def talkback_clock(self):
+        """Anchor packet timestamps to the receiver clock for this talk session."""
+        started = time.monotonic()
+        code, body = self.request("clock")
+        finished = time.monotonic()
+        if code == 404:
+            # Older cameras still require synchronized system clocks.
+            return lambda: int(time.time() * 1000)
+        remote = body.get("time_ms")
+        if (code != 200 or type(remote) is not int or remote <= 0
+                or finished - started > 1):
+            raise RuntimeError("Camera clock unavailable; release and retry")
+        midpoint = (started + finished) / 2
+        # Monotonic time avoids jumps if Windows later synchronizes its clock.
+        return lambda: int(remote + (time.monotonic() - midpoint) * 1000)

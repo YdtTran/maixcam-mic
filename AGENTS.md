@@ -5,6 +5,49 @@ to detailed evidence; session logs preserve the history. Last updated: 2026-10-1
 
 ## Current State and User Decisions
 
+- **Stage 1 SCO validation (2026-10-11):** Live USB inspection confirmed
+  SCO/CVSD playback and capture at 8kHz mono. Two isolated SCO tone tests
+  exited successfully, but the user reported interrupted SCO sound. Two
+  A2DP file tests timed out; capture processes reopened after all tests.
+  Keep production A2DP: continuous audible SCO acceptance failed. No runtime
+  route/startup, TB2, duplex, lifecycle, video or recording changes.
+  Prepared separate `validation/a2dp-baseline` and `validation/sco-stage1`
+  worktree branches with test helper, procedure and rollback. Browser-cycle
+  comparison and physical latency remain pending; no latency gain measured.
+  See [Stage 1 log](docs/sessions/2026-10-11-sco-stage1.md).
+
+- **Talkback repair (2026-10-11, approximately 00:30):** Measured camera clock
+  2.169 seconds ahead of Windows; Windows Time is stopped and cannot be started
+  by this session. PC talkback now calibrates packet timestamps to an authenticated
+  camera clock endpoint for each session without relaxing the two-second age
+  limit. Sender deadlines also compensate for coarse Windows timer waits.
+  Camera playback drops temporary full-pipe frames instead of restarting
+  audio; normal release clears stale PC interruption status. Camera connector
+  PID1260 and receiver PID1481 deployed; native PID9128 retains TCP/video and
+  UDP8004 return. Silent device test kept one player through the hold and restored
+  capture; Chromium validated video, return audio and talkback signaling. Audible
+  speech still needs user confirmation. See [talkback repair log](docs/sessions/2026-10-11-talkback-repair.md).
+
+- **Operator startup repair (2026-10-11, approximately 00:17):** Docker operator
+  was restarting on MediaMTX's 4 MiB UDP request versus the Linux buffer limit.
+  `app.py` now caps the request to `rmem_max`, or uses OS defaults if unreadable;
+  native Windows sizing is unchanged. Native helper now detects restarting
+  Docker operators too; Docker helper no longer requires VM sysctl changes.
+  Docker image rebuilt, but operator container remains stopped. Native PID28756
+  restored TCP/video plus UDP8004 return; HTTP200, decoded H.264 and available
+  talkback verified. PPS errors did not recur in the short native check.
+  See [startup repair log](docs/sessions/2026-10-11-startup-repair.md).
+
+- **Bluetooth reconnect repair (2026-10-11, approximately 00:09):** Documented
+  pinned PuTTY login works via USB 10.172.16.1. Camera connector PID3846 now
+  avoids redundant Bluetooth mutations on healthy polls, does not re-pair on
+  failed status reads, and backs off failed reconnects to 30 seconds. Camera
+  logs showed historical busy/unknown/timeouts and missing playback PCM; the
+  physical drop cause remains unproven. BlueALSA4.1.1/BlueZ5.68 expose both SCO
+  directions and A2DP playback. Only the connector was restarted; accepted
+  TCP/video plus independent return and A2DP/pause talkback remain unchanged.
+  See the Bluetooth stability log for backup paths and validation.
+
 - **User acceptance (2026-10-11):** The user reports that latency is great after
   direct deployment and requested committing this implementation before further
   work. Preserve TCP/video plus independent PCMU return on UDP8004. This is user
@@ -79,6 +122,7 @@ to detailed evidence; session logs preserve the history. Last updated: 2026-10-1
 | [Headset implementation log](docs/sessions/2026-10-10-headset-return.md) | Code changes, synthetic verification and unchanged live runtime |
 | [Headset deployment log](docs/sessions/2026-10-10-headset-deployment.md) | Active native runtime, real camera RTP/browser delivery and remaining SSH/duplex limitation |
 | [Headset acceptance log](docs/sessions/2026-10-11-headset-acceptance.md) | User latency feedback and implementation commit scope |
+| [Bluetooth stability log](docs/sessions/2026-10-11-bluetooth-stability.md) | USB access, reconnect-handler repair, deployment and remaining physical-drop investigation |
 
 ## Findings and Open Questions
 

@@ -8,6 +8,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import time
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -26,6 +27,37 @@ ROOT = Path(__file__).resolve().parent
 def media_executable(platform_name=None):
     platform_name = platform_name or os.name
     return ROOT / ("mediamtx.exe" if platform_name == "nt" else "mediamtx")
+
+
+def media_environment(config, environ=None, platform_name=None,
+                      limit_path=Path("/proc/sys/net/core/rmem_max")):
+    """Keep Linux UDP buffer requests within the current kernel ceiling."""
+    env = dict(os.environ if environ is None else environ)
+    env["MTX_RTSPTRANSPORTS"] = "udp,tcp"
+    if (platform_name or sys.platform) != "linux":
+        return env
+    requested = env.get("MTX_UDPREADBUFFERSIZE")
+    if requested is None:
+        match = re.search(r"^udpReadBufferSize:\s*(\d+)\s*(?:#.*)?$",
+                          config.read_text(), re.MULTILINE)
+        requested = match.group(1) if match else "0"
+    try:
+        size = int(requested)
+    except ValueError:
+        return env  # Let MediaMTX report invalid explicit settings.
+    if size <= 0:
+        return env
+    try:
+        ceiling = int(limit_path.read_text().strip())
+        if ceiling <= 0:
+            raise ValueError("Invalid kernel receive buffer limit")
+    except (OSError, ValueError):
+        ceiling = 0  # Use OS defaults if the kernel limit cannot be inspected.
+    if size > ceiling:
+        env["MTX_UDPREADBUFFERSIZE"] = str(ceiling)
+        print(f"MediaMTX UDP read buffer: requested {size}; using "
+              f"{ceiling or 'OS default'} (Linux kernel limit)", flush=True)
+    return env
 
 
 def list_host_processes():
@@ -254,8 +286,9 @@ def run(args, spawn=subprocess.Popen, server_factory=ThreadingHTTPServer,
     bluetooth = None
     if token_path.is_file():
         token = bytes.fromhex(token_path.read_text().strip())
-        talkback = TalkbackRelay(token, (args.maix_ip, 9002), transport=args.rtsp_transport)
         bluetooth = CameraBluetoothClient(args.maix_ip, token.hex())
+        talkback = TalkbackRelay(token, (args.maix_ip, 9002), transport=args.rtsp_transport,
+                                clock_sync=bluetooth.talkback_clock)
 
     relay = publisher = server = return_audio = None
     manager = RecordingManager(args.recordings, transport=args.rtsp_transport, mode=args.stream_mode)
@@ -267,7 +300,7 @@ def run(args, spawn=subprocess.Popen, server_factory=ThreadingHTTPServer,
         audio_sdp.write_text(headset_sdp(args.headset_rtp_port), encoding="ascii", newline="")
     try:
         relay = spawn([str(media_exe), str(media_config)], cwd=ROOT,
-                      env={**os.environ, "MTX_RTSPTRANSPORTS": "udp,tcp"})
+                      env=media_environment(media_config))
         wait_for_relay(relay)
         command = publisher_command(args.maix_ip, audio_sdp=audio_sdp,
                                     transport=args.rtsp_transport, mode=args.stream_mode)

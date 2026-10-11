@@ -308,11 +308,13 @@ def main():
     args = parser.parse_args()
     manager = RecordingManager(args.recordings, args.source, transport=args.rtsp_transport)
     talkback = None
+    from .bluetooth_client import CameraBluetoothClient
+    bluetooth = None
     if args.talkback_token.is_file():
         token = bytes.fromhex(args.talkback_token.read_text().strip())
-        talkback = TalkbackRelay(token, (args.talkback_host, 9002), transport=args.rtsp_transport)
-    from .bluetooth_client import CameraBluetoothClient
-    bluetooth = CameraBluetoothClient(args.talkback_host, token.hex()) if talkback else None
+        bluetooth = CameraBluetoothClient(args.talkback_host, token.hex())
+        talkback = TalkbackRelay(token, (args.talkback_host, 9002), transport=args.rtsp_transport,
+                                clock_sync=bluetooth.talkback_clock)
     server = ThreadingHTTPServer((args.bind_host, args.port), make_handler(
         manager, talkback=talkback, bluetooth=bluetooth,
         diagnostics=CameraDiagnostics(args.talkback_host, args.maix_usb_ip)))

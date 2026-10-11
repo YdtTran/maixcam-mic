@@ -21,7 +21,8 @@ def make_packet(token, pcm, stop=False, session=0, sequence=0, timestamp=None):
 
 class TalkbackRelay:
     def __init__(self, token, target, udp_socket=None, spawn=subprocess.Popen,
-                 relay_http="http://127.0.0.1:8889", relay_rtsp="rtsp://127.0.0.1:8554", transport="udp"):
+                 relay_http="http://127.0.0.1:8889", relay_rtsp="rtsp://127.0.0.1:8554", transport="udp",
+                 clock_sync=None):
         if transport not in ("tcp", "udp"):
             raise ValueError("RTSP transport must be tcp or udp")
         self.transport = transport
@@ -43,6 +44,8 @@ class TalkbackRelay:
         self.workers = []
         self.queue = collections.deque(maxlen=3)
         self.error = None
+        self.clock_sync = clock_sync
+        self.timestamp_ms = lambda: int(time.time() * 1000)
 
     def send_pcm(self, pcm):
         if not pcm or len(pcm) % 2 or len(pcm) > MAX_POST_BYTES:
@@ -50,13 +53,16 @@ class TalkbackRelay:
         with self.lock:
             for offset in range(0, len(pcm), FRAME_BYTES):
                 self.udp.sendto(make_packet(self.token, pcm[offset:offset + FRAME_BYTES],
-                                           session=self.session, sequence=self.sequence), self.target)
+                                           session=self.session, sequence=self.sequence,
+                                           timestamp=self.timestamp_ms()), self.target)
                 self.sequence = (self.sequence + 1) & 0xffffffff
 
     def offer(self, sdp):
         with self.control_lock, self.lock:
             if self.location:
                 raise RuntimeError("talkback is already active")
+            if self.clock_sync is not None:
+                self.timestamp_ms = self.clock_sync()
             endpoint = self.relay_http + "/talkback/whip"
             request = Request(endpoint, data=sdp.encode(), headers={"Content-Type": "application/sdp"})
             with urlopen(request, timeout=10) as response:
@@ -125,7 +131,14 @@ class TalkbackRelay:
             self._send_stop()
 
     def _forward(self, cancel):
-        while not cancel.wait(0.02):
+        next_send = time.monotonic() + 0.02
+        while not cancel.wait(max(0, next_send - time.monotonic())):
+            now = time.monotonic()
+            next_send += 0.02
+            if next_send < now:
+                next_send = now + 0.02
+            # Absolute deadlines compensate for Windows rounding a 20ms wait
+            # to ~31ms. Relative waits underfeed 20ms PCM frames by ~35%.
             with self.lock:
                 while self.queue and time.monotonic() - self.queue[0][0] > 0.12:
                     self.queue.popleft()
@@ -147,7 +160,8 @@ class TalkbackRelay:
 
     def _send_stop(self):
         with self.lock:
-            packet = make_packet(self.token, b"", stop=True, session=self.session, sequence=self.sequence)
+            packet = make_packet(self.token, b"", stop=True, session=self.session, sequence=self.sequence,
+                                 timestamp=self.timestamp_ms())
             for _ in range(3):
                 self.udp.sendto(packet, self.target)
             self.sequence = (self.sequence + 1) & 0xffffffff
@@ -177,6 +191,10 @@ class TalkbackRelay:
             except (OSError, HTTPError):
                 pass
         self._send_stop()
+        with self.lock:
+            # The browser closes ICE before posting stop. A decoder EOF during
+            # that normal release can otherwise leave a stale interruption error.
+            self.error = None
 
     def close(self):
         self.stop()

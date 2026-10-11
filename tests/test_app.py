@@ -17,6 +17,45 @@ def fake_media_executable():
 
 
 class AppTests(unittest.TestCase):
+    def test_media_buffer_respects_linux_kernel_limit(self):
+        with TemporaryDirectory() as directory:
+            config = Path(directory) / "mediamtx.yml"
+            limit = Path(directory) / "rmem_max"
+            config.write_text("udpReadBufferSize: 4194304\n")
+            limit.write_text("212992\n")
+            env = app.media_environment(config, {"OTHER": "kept"}, "linux", limit)
+            self.assertEqual(env["MTX_UDPREADBUFFERSIZE"], "212992")
+            self.assertEqual(env["OTHER"], "kept")
+            self.assertEqual(env["MTX_RTSPTRANSPORTS"], "udp,tcp")
+            limit.write_text("4194304\n")
+            self.assertNotIn("MTX_UDPREADBUFFERSIZE",
+                             app.media_environment(config, {}, "linux", limit))
+
+    def test_media_buffer_preserves_native_and_supported_overrides(self):
+        with TemporaryDirectory() as directory:
+            config = Path(directory) / "mediamtx.yml"
+            limit = Path(directory) / "rmem_max"
+            config.write_text("udpReadBufferSize: 4194304\n")
+            limit.write_text("212992\n")
+            self.assertNotIn("MTX_UDPREADBUFFERSIZE",
+                             app.media_environment(config, {}, "win32", limit))
+            for value in ("0", "65536", "invalid"):
+                env = app.media_environment(config, {"MTX_UDPREADBUFFERSIZE": value}, "linux", limit)
+                self.assertEqual(env["MTX_UDPREADBUFFERSIZE"], value)
+            env = app.media_environment(config, {"MTX_UDPREADBUFFERSIZE": "8388608"}, "linux", limit)
+            self.assertEqual(env["MTX_UDPREADBUFFERSIZE"], "212992")
+
+    def test_media_buffer_uses_os_default_if_linux_limit_unreadable(self):
+        with TemporaryDirectory() as directory:
+            config = Path(directory) / "mediamtx.yml"
+            limit = Path(directory) / "rmem_max"
+            config.write_text("udpReadBufferSize: 4194304\n")
+            for contents in (None, "invalid", "0"):
+                if contents is not None:
+                    limit.write_text(contents)
+                env = app.media_environment(config, {}, "linux", limit)
+                self.assertEqual(env["MTX_UDPREADBUFFERSIZE"], "0")
+
     def test_direct_rtp_configuration_rejects_ports_without_a_valid_rtcp_pair(self):
         for port in (1023, 8005, 65535):
             with self.subTest(port=port), patch("sys.stderr"), self.assertRaises(SystemExit):

@@ -65,7 +65,7 @@ try {
             $operatorDockerReady = $LASTEXITCODE -eq 0
         } finally { $ErrorActionPreference = 'Stop' }
         if ($operatorDockerReady) {
-            $operatorContainers = & docker compose -f compose.yaml -f compose.host.yaml ps --status running --quiet server
+            $operatorContainers = & docker compose -f compose.yaml -f compose.host.yaml ps --quiet server
             if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the Docker operator.' }
             if ($operatorContainers) {
                 & docker compose -f compose.yaml -f compose.host.yaml stop server

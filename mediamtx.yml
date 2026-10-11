@@ -1,5 +1,6 @@
 # Allow explicit TCP or UDP media selection; publishers default to UDP.
 # Absorb short scheduling bursts without increasing the RTP reorder deadline.
+# app.py caps this request to Linux's current net.core.rmem_max at startup.
 udpReadBufferSize: 4194304
 udpMaxPayloadSize: 1200
 rtmp: false

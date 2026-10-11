@@ -137,7 +137,11 @@ class TalkbackReceiver:
                         pcm = self.jitter.pop(time.monotonic())
                 if pcm is not None:
                     os.write(self._player().stdin.fileno(), pcm)
-            except (BrokenPipeError, BlockingIOError, OSError, RuntimeError) as error:
+            except BlockingIOError:
+                # A full nonblocking pipe is temporary backpressure. Drop the
+                # frame instead of restarting playback and toggling capture.
+                continue
+            except (BrokenPipeError, OSError, RuntimeError) as error:
                 print("Talkback playback error:", error, flush=True)
                 self.stop()
 

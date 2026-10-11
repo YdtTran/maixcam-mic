@@ -7,6 +7,39 @@ from maix.bluetooth_audio import BluetoothAudioConnector, LEGACY_ROUTE_MARKER, R
 
 
 class BluetoothAudioConnectorTests(unittest.TestCase):
+    def test_connected_trusted_headset_is_not_reconfigured_each_poll(self):
+        commands = []
+        def run(command, timeout=20):
+            commands.append(command)
+            return 0, "Paired: yes\nTrusted: yes\nConnected: yes"
+        with tempfile.TemporaryDirectory() as directory:
+            connector = BluetoothAudioConnector("28:52:E0:16:73:CE", run=run,
+                                                config_path=Path(directory) / "alsa")
+            self.assertTrue(connector.attempt())
+            self.assertTrue(connector.attempt())
+        mutations = [c for c in commands if c[0] == "bluetoothctl" and c[1] != "info"]
+        self.assertEqual(mutations, [])
+
+    def test_failed_status_query_does_not_attempt_pair_or_connect(self):
+        commands = []
+        def run(command, timeout=20):
+            commands.append(command)
+            return (1, "temporary D-Bus error") if command[1] == "info" else (0, "")
+        with tempfile.TemporaryDirectory() as directory:
+            connector = BluetoothAudioConnector("28:52:E0:16:73:CE", run=run,
+                                                config_path=Path(directory) / "alsa")
+            self.assertFalse(connector.attempt())
+        self.assertFalse(any(c[1] in ("pair", "trust", "connect") for c in commands))
+
+    def test_failed_reconnects_back_off_and_success_restores_normal_poll(self):
+        connector = Mock()
+        connector.attempt.side_effect = [False, False, False, False, False, True]
+        stop = Mock()
+        stop.is_set.return_value = False
+        stop.wait.side_effect = [False] * 5 + [True]
+        reconnect_headset(connector, stop)
+        self.assertEqual([call.args[0] for call in stop.wait.call_args_list], [5, 10, 20, 30, 30, 5])
+
     def test_migrates_previous_managed_audio_configuration(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / ".asoundrc"

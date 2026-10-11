@@ -67,19 +67,29 @@ class BluetoothAudioConnector:
         os.replace(temporary, self.config_path)
 
     def attempt(self):
-        self.run(["bluetoothctl", "power", "on"])
-        self.run(["bluetoothctl", "pairable", "on"])
         self._start_bluealsa()
-        _, info = self.run(["bluetoothctl", "info", self.mac])
+        code, info = self.run(["bluetoothctl", "info", self.mac])
+        if code != 0:
+            print("Headset status unavailable:", info.strip(), flush=True)
+            return False
+        # Polling a healthy connection must not continually mutate adapter and
+        # trust state. A transient info failure must not trigger re-pairing.
+        if "Connected: yes" not in info:
+            code, output = self.run(["bluetoothctl", "power", "on"])
+            if code != 0:
+                print("Bluetooth power pending:", output.strip(), flush=True)
+                return False
         if "Paired: yes" not in info:
+            self.run(["bluetoothctl", "pairable", "on"])
             code, output = self.run(["bluetoothctl", "pair", self.mac], timeout=25)
             if code != 0:
                 print("Pairing pending:", output.strip(), flush=True)
                 return False
-        code, output = self.run(["bluetoothctl", "trust", self.mac])
-        if code != 0:
-            print("Headset trust pending:", output.strip(), flush=True)
-            return False
+        if "Trusted: yes" not in info:
+            code, output = self.run(["bluetoothctl", "trust", self.mac])
+            if code != 0:
+                print("Headset trust pending:", output.strip(), flush=True)
+                return False
         if "Connected: yes" not in info:
             code, output = self.run(["bluetoothctl", "connect", self.mac], timeout=20)
             if code != 0:
@@ -90,12 +100,16 @@ class BluetoothAudioConnector:
 
 
 def reconnect_headset(connector, stop, interval=5):
+    retry_delay = interval
     while not stop.is_set():
+        connected = False
         try:
-            connector.attempt()
+            connected = connector.attempt()
         except (OSError, RuntimeError) as error:
             print("Headset reconnect pending:", error, flush=True)
-        if stop.wait(interval):
+        delay = interval if connected else retry_delay
+        retry_delay = interval if connected else min(30, retry_delay * 2)
+        if stop.wait(delay):
             break
 
 

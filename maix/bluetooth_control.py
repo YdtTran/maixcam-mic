@@ -5,6 +5,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -131,6 +132,8 @@ def make_handler(control, token):
         def do_GET(self):
             if not self._authorized():
                 return
+            if self.path == "/bluetooth/clock":
+                return self._json(200, {"time_ms": int(time.time() * 1000)})
             if self.path == "/bluetooth/status":
                 return self._json(200, control.status())
             self._json(404, {"error": "not found"})

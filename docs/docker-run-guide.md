@@ -184,26 +184,26 @@ Wait for SSH to return. The launcher starts the camera; `/etc/rc.local` starts B
 
 If a native `python app.py` session is already running, stop it with **Ctrl+C in its terminal** first. A previously hidden launch must be stopped using its verified project PID and command line. Do not kill every Python or FFmpeg process. Native and Docker stacks compete for the same ports.
 
-The tuned relay requests 4 MiB UDP buffers. Linux's default socket buffer ceiling can be lower, causing MediaMTX to exit with `unable to set UDP read buffer size`. On Windows, use the helper, which starts Docker if needed, reapplies the VM limits, validates Compose, and builds/starts the stack:
+The relay configuration requests 4 MiB UDP buffers. At startup, `app.py` caps MediaMTX's request to Linux's current `net.core.rmem_max`. If that limit cannot be read, it uses the OS default (`udpReadBufferSize: 0`, as documented in the [MediaMTX configuration](https://github.com/bluenviron/mediamtx/blob/v1.21.1/mediamtx.yml)). This avoids the fatal `unable to set UDP read buffer size` error after Docker VM resets. Native Windows keeps its existing 4 MiB request. On Windows, the helper starts Docker if needed, validates Compose, and builds/starts the stack:
 
 ```powershell
 ./start_docker.ps1 -Build
 ```
 
-The helper requires Desktop host networking to be enabled first. Docker Desktop may reset Linux limits on an engine/VM restart, so use this helper for daily startup too. Its buffer command is:
+The helper requires Desktop host networking to be enabled first. Enlarging Linux UDP limits is optional tuning. On Docker Desktop, when the VM exposes these sysctls, use:
 
 ```powershell
 wsl -d docker-desktop -u root -- sysctl -w net.core.rmem_max=4194304 net.core.wmem_max=4194304
 ```
 
-On a Linux Docker host, set the limits before starting; to retain them across reboots:
+On a Linux Docker host, optionally enlarge the limits and retain them across reboots:
 
 ```bash
 printf 'net.core.rmem_max=4194304\nnet.core.wmem_max=4194304\n' | sudo tee /etc/sysctl.d/90-workercam-udp.conf
 sudo sysctl -p /etc/sysctl.d/90-workercam-udp.conf
 ```
 
-Manual Compose startup after the limits are configured:
+Manual Compose startup (no kernel tuning required):
 
 ```powershell
 docker compose -f compose.yaml -f compose.host.yaml config --quiet
@@ -247,7 +247,7 @@ Use localhost for browser microphone access. Viewing the UI through a remote HTT
 
 After initial setup, power on MaixCAM and the earbuds, then run:
 
-On Windows, start with `./start_docker.ps1` so the Docker VM buffer limits are reapplied. On Linux with persistent sysctl settings, use the following directly:
+On Windows, use `./start_docker.ps1` for Docker startup checks. On Linux, use the following directly:
 
 ```powershell
 docker compose -f compose.yaml -f compose.host.yaml up -d
@@ -294,13 +294,13 @@ Camera RTSP UDP media also uses ports negotiated during RTSP setup, including PC
 | Container will not start | Check Docker is running, token is a file, recording directory exists, and native services have released the ports. Read Compose logs. |
 | Windows cannot open the page, but container HTTP works | This failure persisted after Desktop restart and operator recreation on 2026-10-10. Use the README native TCP/video startup route after stopping the operator container; preserve unrelated containers. The Docker forwarding cause remains unresolved. |
 | Page returns 404 | Use `/operator_test.html`, not `/operaator_test.html`. MaixCAM does not serve this PC page. |
-| MediaMTX cannot set UDP buffer size | Run `./start_docker.ps1` on Windows or apply the Linux sysctl settings above. |
+| MediaMTX cannot set UDP buffer size | Rebuild the image with `docker compose -f compose.yaml -f compose.host.yaml build server`, then recreate the server. Current `app.py` adapts the request to the Linux limit; an old container still uses the old startup code. |
 | UI loads, camera stays offline | Run the container UDP probe; check MaixCAM launcher, camera Wi-Fi IP, host mode, and firewall. |
 | Headset input absent | In this guide `/headsetmic` is unused. Check camera `--target`, `--rtp-port 8004`, matching `HEADSET_RTP_PORT`, and UDP 8004/8005. Read `/root/headset-mic-stream.log`. |
 | WebRTC ICE connection times out | Allow browser microphone permission, reload, check `WEBRTC_HOSTS`, and confirm Desktop host networking is enabled. |
-| Video corruption or freezes | Look for `RTP: missed` / `RTP packets lost`. The current configuration uses 4 MiB receive buffers and 1200-byte relay payloads; Wi-Fi loss can still damage upstream H.264 frames. |
+| Video corruption or freezes | Look for `RTP: missed` / `RTP packets lost`. FFmpeg requests 4 MiB receive buffers; MediaMTX adapts to Linux's ceiling. Relay payloads are 1200 bytes; Wi-Fi loss can still damage upstream H.264 frames. |
 | Headset audio missing | Click Enable audio, check fixed-earbud status, disconnect earbuds from other devices, and read `/root/bluetooth-audio.log`. |
-| Talkback unavailable | Check matching tokens without printing them, microphone permission, UDP 9002, `/root/talkback-receiver.log`, and PC/camera clocks within two seconds. |
+| Talkback unavailable | Check matching tokens without printing them, microphone permission, UDP 9002, and `/root/talkback-receiver.log`. Current PC code calibrates timestamps through authenticated `/bluetooth/clock`; deploy current `bluetooth_control.py` on the camera. Older camera code requires PC/camera clocks within two seconds. |
 | Wi-Fi unreachable | Use USB SSH; check `ip -4 addr`, `netstat -lnt`, and camera logs. USB diagnostics do not switch the media path. |
 | Recording does not play | Stop recording first. Check host `recordings/`, free disk space, and recording API status. |
 

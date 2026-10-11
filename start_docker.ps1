@@ -32,9 +32,8 @@ try {
             throw 'Enable host networking in Docker Desktop Settings > Resources > Network, then apply/restart.'
         }
     }
-    # Docker Desktop's VM resets these Linux limits on engine/VM restarts.
-    & wsl -d docker-desktop -u root -- sysctl -w net.core.rmem_max=4194304 net.core.wmem_max=4194304
-    if ($LASTEXITCODE -ne 0) { throw 'Could not configure Docker VM UDP buffer limits.' }
+    # app.py adapts MediaMTX's UDP buffer request to the current Linux limit.
+    # Startup does not require changing global Docker VM kernel settings.
     if (-not (Test-Path -LiteralPath .talkback_token -PathType Leaf)) {
         throw 'Missing .talkback_token file. Follow docs/docker-run-guide.md before starting.'
     }

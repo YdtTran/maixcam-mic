@@ -2,6 +2,7 @@ import tempfile
 import json
 import threading
 import unittest
+from unittest.mock import Mock, patch
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
@@ -11,9 +12,50 @@ from maix.bluetooth_control import BluetoothControl, make_handler as camera_hand
 from maix.headset_mic_stream import selected_mac
 from pc.bluetooth_client import CameraBluetoothClient
 from pc.operator_server import RecordingManager, make_handler as operator_handler
+from pc.operator_server import main as operator_main
 
 
 class BluetoothControlTests(unittest.TestCase):
+    def test_standalone_operator_wires_camera_clock_to_talkback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            token = Path(directory) / "token"
+            token.write_text("61" * 16)
+            server = Mock()
+            server.serve_forever.side_effect = KeyboardInterrupt
+            with patch("sys.argv", ["operator", "--talkback-host", "192.0.2.1",
+                                    "--talkback-token", str(token), "--recordings", directory]), \
+                    patch("pc.bluetooth_client.CameraBluetoothClient") as client, \
+                    patch("pc.operator_server.TalkbackRelay") as relay, \
+                    patch("pc.operator_server.ThreadingHTTPServer", return_value=server):
+                operator_main()
+                self.assertIs(relay.call_args.kwargs["clock_sync"], client.return_value.talkback_clock)
+            server.server_close.assert_called_once()
+
+    def test_talkback_clock_tracks_camera_time_despite_pc_clock_jumps(self):
+        client = CameraBluetoothClient("127.0.0.1", "secret")
+        client.request = Mock(return_value=(200, {"time_ms": 1000000}))
+        with patch("pc.bluetooth_client.time.monotonic", side_effect=[10, 10.02, 10.11]), \
+                patch("pc.bluetooth_client.time.time", return_value=0):
+            clock = client.talkback_clock()
+            self.assertAlmostEqual(clock(), 1000100, delta=1)
+        client.request.assert_called_once_with("clock")
+
+    def test_talkback_clock_rejects_failed_slow_or_invalid_calibration(self):
+        client = CameraBluetoothClient("127.0.0.1", "secret")
+        for response, elapsed in (((403, {"error": "unauthorized"}), .02),
+                                  ((200, {"time_ms": "1000"}), .02),
+                                  ((200, {"time_ms": 1000}), 1.1)):
+            client.request = Mock(return_value=response)
+            with patch("pc.bluetooth_client.time.monotonic", side_effect=[10, 10 + elapsed]), \
+                    self.assertRaisesRegex(RuntimeError, "Camera clock unavailable"):
+                client.talkback_clock()
+
+    def test_older_camera_clock_falls_back_to_synchronized_system_time(self):
+        client = CameraBluetoothClient("127.0.0.1", "secret")
+        client.request = Mock(return_value=(404, {}))
+        with patch("pc.bluetooth_client.time.time", return_value=100):
+            self.assertEqual(client.talkback_clock()(), 100000)
+
     def test_fixed_binding_survives_restart_and_rejects_other_devices(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "selected"
@@ -125,6 +167,10 @@ class BluetoothControlTests(unittest.TestCase):
                 with self.assertRaises(HTTPError) as error:
                     urlopen(f"http://127.0.0.1:{camera.server_port}/bluetooth/status")
                 self.assertEqual(error.exception.code, 403)
+                with self.assertRaises(HTTPError) as error:
+                    urlopen(f"http://127.0.0.1:{camera.server_port}/bluetooth/clock")
+                self.assertEqual(error.exception.code, 403)
+                self.assertGreater(client.request("clock")[1]["time_ms"], 0)
                 base = f"http://127.0.0.1:{operator.server_port}/api/bluetooth"
                 with urlopen(Request(base + "/scan", data=b"", method="POST")) as response:
                     self.assertEqual(json.load(response)["devices"][0]["name"], "Headset")

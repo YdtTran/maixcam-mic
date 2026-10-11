@@ -114,7 +114,7 @@ and audible talkback were not physically retested after this switch. See the
 For Docker installation and the unresolved Windows access issue, use the
 [Docker run guide](docs/docker-run-guide.md). `./start_docker.ps1` (or `-Build`
 after code changes) remains the Docker helper, but is not the current working
-Windows startup route. It applies VM UDP buffer limits and starts host mode,
+Windows startup route. It starts host mode with automatic Linux UDP buffer sizing,
 refuses to run alongside the native operator, and reports failure if Windows
 cannot reach the page. On that failure, run `.\start_operator.ps1`.
 Keep `.env` set to TCP/video when testing Docker again.
@@ -151,7 +151,7 @@ and optional duplex settings. Keep current camera video services.
 
 For two-way voice, copy `pc/talkback_protocol.py` beside `maix/talkback_receiver.py` on the camera, and copy `maix/bluetooth_audio.py`, `maix/bluetooth_control.py`, and `maix/headset_mic_stream.py` to MaixCAM. The startup template binds MaixCAM to its fixed earbuds using `--fixed-mac`. The Bluetooth address is saved in `/root/.bluetooth_device` and survives reboot. The audio service enables the hands-free audio-gateway profiles, trusts the earbuds, and retries connection every five seconds. No scan or device choice is required each session. The admin interface shows connection status and prevents switching to other earbuds. For initial pairing, put the bound earbuds in pairing mode. If they are unavailable, microphone streaming supplies silence while connection retries continue. The authenticated Bluetooth status service remains on TCP 8765. Do not start a second talkback receiver on UDP 9002. The boot script sets `HOME=/root` so ALSA can read `/root/.asoundrc`.
 
-Browser talkback now sends WebRTC audio through WHIP; HTTP carries SDP and stop control only. The PC sends HMAC-authenticated TB2 datagrams to MaixCAM with session IDs, sequence numbers, timestamps, bounded jitter buffering, and stale-packet dropping. Synchronize PC/camera clocks within two seconds. Update the PC and camera receiver together: TB1 packets are rejected.
+Browser talkback sends WebRTC audio through WHIP. The PC sends HMAC-authenticated TB2 datagrams to MaixCAM with session IDs, sequence numbers, timestamps, bounded jitter buffering, and stale-packet dropping. Each talk session calibrates packet timestamps through the authenticated camera clock endpoint, so Windows clock skew does not block playback. Deploy current `bluetooth_control.py` on the camera; older cameras still require PC/camera clocks within two seconds. Update the PC and camera receiver together: TB1 packets are rejected.
 
 The PC operator reads the repository's `.talkback_token`, while the camera receiver and Bluetooth control service read `/root/.talkback_token`. They must contain the same value. The repository also includes `auto.key`; Docker does not use it. Hold **Hold to Talk** while speaking; release it to stop. If talkback is unavailable, check `GET /api/talkback/status`, the camera's UDP port 9002, and its receiver log. If device scanning fails, check TCP 8765 connectivity and `/root/bluetooth-audio.log` on the camera.
 
