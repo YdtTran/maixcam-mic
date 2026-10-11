@@ -4,7 +4,8 @@ param(
     [string]$MaixIp,
     [ValidateSet('tcp', 'udp')][string]$Transport,
     [ValidateSet('video', 'audio', 'combined')][string]$StreamMode,
-    [int]$ReturnAudioPort = 8004
+    [int]$ReturnAudioPort = 8004,
+    [ValidateSet('legacy', 'multistream')][string]$RecordingMode = 'legacy'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -95,6 +96,10 @@ try {
                 }
             }
             $operatorReturnEnabled = $operatorCommand.Contains("--return-audio-port $ReturnAudioPort")
+            $operatorMultistream = $operatorCommand.Contains('--recording-mode multistream')
+            if (($RecordingMode -eq 'multistream') -ne $operatorMultistream) {
+                throw 'The running operator uses a different recording mode. Stop it with .\stop_operator.ps1 before restarting.'
+            }
             if (($ReturnAudioPort -gt 0 -and -not $operatorReturnEnabled) -or
                 ($ReturnAudioPort -eq 0 -and $operatorCommand.Contains('--return-audio-port'))) {
                 throw 'The running operator uses different return-audio settings. Stop it with .\stop_operator.ps1 before restarting.'
@@ -111,6 +116,7 @@ try {
         '--maix-ip', $MaixIp, '--rtsp-transport', $Transport, '--stream-mode', $StreamMode
     )
     if ($ReturnAudioPort -gt 0) { $operatorArguments += @('--return-audio-port', $ReturnAudioPort) }
+    if ($RecordingMode -eq 'multistream') { $operatorArguments += @('--recording-mode', 'multistream') }
     $operatorProcess = Start-Process -FilePath $operatorPython -ArgumentList $operatorArguments -WorkingDirectory $PSScriptRoot -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $PSScriptRoot '.runtime/operator-native.stdout.log') `
         -RedirectStandardError (Join-Path $PSScriptRoot '.runtime/operator-native.stderr.log')

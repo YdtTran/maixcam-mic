@@ -242,6 +242,33 @@ test("physical camera actions use existing APIs; settings retain Bluetooth selec
   );
 });
 
+test("multistream finalization protects recording and reports saved after completion", async ({ page }) => {
+  await setup(page);
+  let recording = false;
+  let finalizing = false;
+  await page.route("**/api/recordings/status", (route) => route.fulfill({
+    contentType: "application/json", body: JSON.stringify({ recording, finalizing, duration_seconds: 1 }),
+  }));
+  await page.route("**/api/recordings/start", (route) => {
+    recording = true;
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify({ recording }) });
+  });
+  await page.route("**/api/recordings/stop", (route) => {
+    finalizing = true;
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify({ recording, finalizing }) });
+  });
+  await login(page);
+  await page.getByRole("button", { name: "Record", exact: true }).click();
+  await page.getByRole("button", { name: "Stop Recording" }).click();
+  await expect(page.getByRole("button", { name: "Finalizing...", exact: true })).toBeDisabled();
+  await expect(page.getByRole("status")).toContainText("Finalizing recording");
+  await page.screenshot({ path: "test-results/multistream-finalizing.png" });
+  finalizing = false;
+  recording = false;
+  await expect(page.getByRole("button", { name: "Record", exact: true })).toBeEnabled({ timeout: 15000 });
+  await expect(page.getByRole("status")).toContainText("recording saved");
+});
+
 test("desktop composition, search, notifications, and honest offline status", async ({
   page,
 }) => {

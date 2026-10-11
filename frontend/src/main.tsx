@@ -63,6 +63,8 @@ function App() {
   const [talking, setTalking] = useState(false);
   const [stoppingTalk, setStoppingTalk] = useState(false);
   const [recordStatusKnown, setRecordStatusKnown] = useState(false);
+  const [recordFinalizing, setRecordFinalizing] = useState(false);
+  const wasFinalizing = useRef(false);
   const [headset, setHeadset] = useState<BluetoothStatus | null>(null);
   const [talkAvailable, setTalkAvailable] = useState(false);
   const [streamState, setStreamState] = useState("Connecting");
@@ -125,6 +127,12 @@ function App() {
     ]);
     const status = results[0];
     setRecordStatusKnown(status.status === "fulfilled");
+    if (status.status === "fulfilled") {
+      setRecordFinalizing(Boolean(status.value.finalizing));
+      if (status.value.error) setNotice(status.value.error);
+      else if (wasFinalizing.current && !status.value.recording) setNotice("MaixCAM recording saved.");
+      wasFinalizing.current = Boolean(status.value.finalizing);
+    }
     if (status.status === "fulfilled")
       setWorkers((items) =>
         items.map((item) =>
@@ -240,12 +248,14 @@ function App() {
               : item,
           ),
         );
-        await refresh();
         setNotice(
-          result.recording
+          result.finalizing
+            ? "Finalizing recording. Please wait before starting another."
+            : result.recording
             ? "MaixCAM recording started."
             : "MaixCAM recording saved.",
         );
+        await refresh();
       } else {
         const now = new Date();
         if (worker.recording) {
@@ -647,6 +657,7 @@ function App() {
                             : "record-button"
                         }
                         disabled={
+                          (real && recordFinalizing) ||
                           busy ||
                           (real &&
                             (!recordStatusKnown ||
@@ -657,6 +668,8 @@ function App() {
                         <Circle size={13} fill="currentColor" />
                         {busy
                           ? "Saving..."
+                          : real && recordFinalizing
+                            ? "Finalizing..."
                           : worker.recording
                             ? "Stop Recording"
                             : "Record"}

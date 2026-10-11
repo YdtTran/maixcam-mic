@@ -5,6 +5,18 @@ to detailed evidence; session logs preserve the history. Last updated: 2026-10-1
 
 ## Current State and User Decisions
 
+- **PC multistream recorder (2026-10-11):** Implemented opt-in
+  `--recording-mode multistream` / native `-RecordingMode multistream`. Independent
+  H.264-copy staging and reconnecting 48 kHz PCM decoders produce mixed default,
+  worker and operator AAC tracks on asynchronous stop. Monotonic audio timeline
+  with silence; video arrival timestamps use a fixed PC clock bridge. Legacy
+  recorder remains default. No camera, Bluetooth, live TCP/video route or runtime
+  deployment changes. 105 Python tests passed, four skipped; two isolated real
+  media tests and 22 browser tests passed. Physical flash/click synchronization,
+  long hardware drift and VLC acceptance remain pending. See
+  [recording guide](docs/multistream-recording.md) and
+  [session evidence](docs/sessions/2026-10-11-multistream-recording.md).
+
 - **SCO duplex trial (2026-10-11):** User requested a separate branch and
   sustained SCO investigation. `experiment/sco-duplex` starts from accepted
   recovery commit `4e8aafb` on clean `uplink-audio`. User confirmed simultaneous
@@ -147,6 +159,7 @@ to detailed evidence; session logs preserve the history. Last updated: 2026-10-1
 | [2026-10-10 session log](docs/sessions/2026-10-10-rtsp-latency.md) | Investigation history, final user decision and next steps |
 | [UDP protocol/deployment history](docs/udp-media.md) | Earlier UDP validation, protocol details and fallback |
 | [Frontend guide](frontend/README.md) | UI development, API and persistence boundaries |
+| [Multistream recording](docs/multistream-recording.md) | Opt-in PC recorder, timeline strategy, four-track MP4, recovery and physical acceptance procedure |
 | [Headset return guide](docs/headset-return-audio.md) | Independent microphone return, duplex prerequisites, exact device/Windows commands and pending hardware checks |
 | [Headset implementation log](docs/sessions/2026-10-10-headset-return.md) | Code changes, synthetic verification and unchanged live runtime |
 | [Headset deployment log](docs/sessions/2026-10-10-headset-deployment.md) | Active native runtime, real camera RTP/browser delivery and remaining SSH/duplex limitation |

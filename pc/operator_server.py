@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from .talkback import MAX_POST_BYTES, TalkbackRelay
 from .camera_diagnostics import CameraDiagnostics, DEFAULT_USB_IP, ipv4
+from .multistream_recording import MultistreamRecording
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -25,11 +26,17 @@ RECORDING_ID = re.compile(r"^[0-9]{8}T[0-9]{6}Z_[0-9a-f]{8}$")
 
 class RecordingManager:
     def __init__(self, directory=DEFAULT_RECORDINGS, source="rtsp://127.0.0.1:8554/maix01", spawn=subprocess.Popen,
-                 transport="udp", mode="combined"):
+                 transport="udp", mode="combined", recording_mode="legacy"):
         if transport not in ("tcp", "udp") or mode not in ("video", "audio", "combined"):
             raise ValueError("Invalid transport or stream mode")
         self.transport = transport
         self.mode = mode
+        if recording_mode not in ("legacy", "multistream"):
+            raise ValueError("Invalid recording mode")
+        if recording_mode == "multistream" and mode == "audio":
+            raise ValueError("Multistream recording requires video")
+        self.recording_mode = recording_mode
+        self._last_recording_status = {}
         directory = Path(directory)
         self.directory = directory if directory.is_absolute() else PROJECT_ROOT / directory
         self.source = source
@@ -42,6 +49,8 @@ class RecordingManager:
 
     def _refresh(self):
         if self._process is not None and self._process.poll() is not None:
+            if isinstance(self._process, MultistreamRecording):
+                self._last_recording_status = self._process.status()
             self._close_process()
 
     def _close_process(self):
@@ -64,10 +73,14 @@ class RecordingManager:
                 display_path = path.relative_to(PROJECT_ROOT).as_posix()
             else:
                 display_path = str(path)
+            details = (self._process.status() if isinstance(self._process, MultistreamRecording)
+                       else self._last_recording_status)
             return {
+                **details,
                 "recording": self._process is not None,
                 "id": self._recording_id,
-                "duration_seconds": round(time.monotonic() - self._started) if self._started else 0,
+                "duration_seconds": details.get("duration_seconds", round(time.monotonic() - self._started)
+                                                if self._started else 0),
                 "size_bytes": path.stat().st_size if path and path.exists() else 0,
                 "path": display_path,
             }
@@ -80,6 +93,12 @@ class RecordingManager:
             self.directory.mkdir(parents=True, exist_ok=True)
             recording_id = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ") + "_" + uuid4().hex[:8]
             output = self.recording_path(recording_id)
+            self._last_recording_status = {}
+            if self.recording_mode == "multistream":
+                self._process = MultistreamRecording(output, self.source, self.transport, self.spawn)
+                self._recording_id = recording_id
+                self._started = self._process.started
+                return self.status()
             log = output.with_suffix(".ffmpeg.log").open("wb")
             command = [
                 "ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostats",
@@ -111,6 +130,9 @@ class RecordingManager:
             if self._process is None:
                 raise RuntimeError("recording is not active")
             process = self._process
+            if isinstance(process, MultistreamRecording):
+                process.stop()
+                return self.status()
             output = self.recording_path(self._recording_id)
             duration = round(time.monotonic() - self._started)
             try:
@@ -125,6 +147,15 @@ class RecordingManager:
             if output.is_file() and output.stat().st_size:
                 output.with_suffix(".json").write_text(json.dumps({"duration_seconds": duration}))
             return self.status()
+
+    def wait(self):
+        """Allow app shutdown to finish an asynchronous multistream mux."""
+        with self._lock:
+            process = self._process
+        if isinstance(process, MultistreamRecording):
+            process.wait()
+        with self._lock:
+            self._refresh()
 
     def recording_path(self, recording_id):
         if not recording_id or not RECORDING_ID.fullmatch(recording_id):
@@ -300,13 +331,15 @@ def main():
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--source", default="rtsp://127.0.0.1:8554/maix01")
     parser.add_argument("--recordings", type=Path, default=DEFAULT_RECORDINGS)
+    parser.add_argument("--recording-mode", choices=("legacy", "multistream"), default="legacy")
     parser.add_argument("--rtsp-transport", choices=("tcp", "udp"), default=os.environ.get("RTSP_TRANSPORT", "udp"))
     parser.add_argument("--talkback-host", required=True, help="MaixCAM IP address for UDP talkback")
     parser.add_argument("--maix-usb-ip", type=ipv4, default=os.environ.get("MAIX_USB_IP") or DEFAULT_USB_IP)
     parser.add_argument("--bind-host", default="127.0.0.1", help="Laptop IP address for the operator page")
     parser.add_argument("--talkback-token", type=Path, default=PROJECT_ROOT / ".talkback_token")
     args = parser.parse_args()
-    manager = RecordingManager(args.recordings, args.source, transport=args.rtsp_transport)
+    manager = RecordingManager(args.recordings, args.source, transport=args.rtsp_transport,
+                               recording_mode=args.recording_mode)
     talkback = None
     from .bluetooth_client import CameraBluetoothClient
     bluetooth = None
@@ -326,6 +359,7 @@ def main():
     finally:
         if manager.status()["recording"]:
             manager.stop()
+        manager.wait()
         server.server_close()
         if talkback is not None:
             talkback.close()

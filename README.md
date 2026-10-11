@@ -42,8 +42,11 @@ STREAM_MODE=video
 
 MaixCAM video reaches PC FFmpeg over RTSP/TCP, is copied as H.264 to MediaMTX
 over RTSP/TCP, and reaches the admin browser through WebRTC/WHEP over UDP.
-Headset microphone audio is excluded from the monitored stream and recordings
-in this mode. Browser WHIP talkback and the sequenced-UDP camera relay remain
+Headset microphone audio is excluded from `/maix01` and legacy recordings
+in this mode. Opt-in [PC multistream recording](docs/multistream-recording.md)
+adds mixed, worker and operator AAC tracks while retaining this video route:
+`./start_operator.ps1 -RecordingMode multistream`. Physical recording A/V
+synchronization and VLC acceptance are pending. Browser WHIP talkback and the sequenced-UDP camera relay remain
 available; they are independent of microphone monitoring.
 
 The physical Edge stopwatch pilot measured 230 ms median and 240 ms p95 with

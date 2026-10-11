@@ -142,6 +142,8 @@ def parse_args(argv=None):
     parser.add_argument("--bind-host", default="127.0.0.1", help="Operator page bind address")
     parser.add_argument("--port", type=int, default=8000, help="Operator page port")
     parser.add_argument("--recordings", type=Path, default=Path("recordings"))
+    parser.add_argument("--recording-mode", choices=("legacy", "multistream"), default="legacy",
+                        help="Opt-in PC multistream recorder; independent of live stream mode")
     parser.add_argument("--talkback-token", type=Path, default=ROOT / ".talkback_token")
     parser.add_argument("--rtsp-transport", choices=("tcp", "udp"),
                         default=os.environ.get("RTSP_TRANSPORT", "udp"))
@@ -152,6 +154,8 @@ def parse_args(argv=None):
     parser.add_argument("--return-audio-port", type=int, default=os.environ.get("RETURN_AUDIO_PORT") or None,
                         help="Independent PCMU RTP receiver for /headsetmic (video mode only)")
     args = parser.parse_args(argv)
+    if args.recording_mode == "multistream" and args.stream_mode == "audio":
+        parser.error("Multistream recording requires a video stream")
     if args.return_audio_port is not None:
         if args.stream_mode != "video":
             parser.error("Independent return audio requires --stream-mode video")
@@ -291,7 +295,8 @@ def run(args, spawn=subprocess.Popen, server_factory=ThreadingHTTPServer,
                                 clock_sync=bluetooth.talkback_clock)
 
     relay = publisher = server = return_audio = None
-    manager = RecordingManager(args.recordings, transport=args.rtsp_transport, mode=args.stream_mode)
+    manager = RecordingManager(args.recordings, transport=args.rtsp_transport, mode=args.stream_mode,
+                               recording_mode=args.recording_mode)
     audio_sdp = None
     if args.headset_rtp_port:
         runtime = ROOT / ".runtime"
@@ -344,6 +349,7 @@ def run(args, spawn=subprocess.Popen, server_factory=ThreadingHTTPServer,
         try:
             if manager.status()["recording"]:
                 manager.stop()
+            manager.wait()
         finally:
             if server is not None:
                 server.server_close()
