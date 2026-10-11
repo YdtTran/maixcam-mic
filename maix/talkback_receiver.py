@@ -27,7 +27,10 @@ def valid_packet(packet, token):
 
 class TalkbackReceiver:
     def __init__(self, token, bind=("0.0.0.0", 9002), spawn=subprocess.Popen,
-                 pause_path=PAUSE_PATH, ack_path=ACK_PATH, duplex=False):
+                 pause_path=PAUSE_PATH, ack_path=ACK_PATH, duplex=False, playback_profile=None):
+        self.playback_profile = playback_profile or ("sco" if duplex else "a2dp")
+        if self.playback_profile not in ("a2dp", "sco") or (duplex and self.playback_profile != "sco"):
+            raise ValueError("duplex requires SCO playback")
         self.duplex = duplex
         self.jitter = JitterBuffer()
         self.lock = threading.Lock()
@@ -61,8 +64,11 @@ class TalkbackReceiver:
 
     def _player(self):
         if self.player is None or self.player.poll() is not None:
+            command = ["aplay", "-q", "-D", "bt_output", "-f", "S16_LE", "-r", "8000", "-c", "1"]
+            if self.playback_profile == "sco":
+                command += ["-t", "raw", "--period-time", "20000", "--buffer-time", "80000"]
             self.player = self.spawn(
-                ["aplay", "-q", "-D", "bt_output", "-f", "S16_LE", "-r", "8000", "-c", "1"],
+                command,
                 stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, bufsize=0,
                 env={**os.environ, "HOME": "/root"},
             )
@@ -112,20 +118,37 @@ class TalkbackReceiver:
 
     def _playback(self, closing):
         generation = self.generation
+        next_sco_frame = 0.0
         while not closing.wait(0.01):
             with self.lock:
+                now = time.monotonic()
                 changed = generation != self.generation
                 generation = self.generation
-                idle = self.last_packet and time.monotonic() - self.last_packet > 0.5
+                idle = self.last_packet and now - self.last_packet > 0.5
                 if idle:
                     self.retired.append(self.jitter.session)
                     self.jitter.reset()
                     self.last_packet = 0
-                pcm = self.jitter.pop(time.monotonic())
+                ready = self.playback_profile != "sco" or now >= next_sco_frame
+                pcm = self.jitter.pop(now) if ready else None
+                active = bool(self.last_packet)
             if changed or idle:
                 self.stop()
-            if pcm is None:
+                next_sco_frame = 0.0
+            if not ready:
                 continue
+            if pcm is None:
+                if self.playback_profile == "sco" and self.player is not None and active and not (changed or idle):
+                    # SCO's short buffer cannot absorb network gaps. Keep its
+                    # clock running with silence rather than underrunning and
+                    # repeatedly priming playback when packets resume.
+                    pcm = bytes(320)
+                else:
+                    continue
+            if self.playback_profile == "sco":
+                next_sco_frame += 0.02
+                if next_sco_frame <= now:
+                    next_sco_frame = now + 0.02
             try:
                 selected_at = time.monotonic()
                 self._pause_mic()
@@ -173,13 +196,18 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--token", type=Path, default=Path("/root/.talkback_token"))
     parser.add_argument("--port", type=int, default=9002)
+    parser.add_argument("--playback-profile", choices=("a2dp", "sco"),
+                        help="Match connector route; defaults to SCO with --duplex, otherwise A2DP")
     parser.add_argument("--duplex", action="store_true",
                         help="Keep SCO capture open; requires SCO bt_output and verified hardware duplex")
     args = parser.parse_args()
+    if args.duplex and args.playback_profile == "a2dp":
+        parser.error("--duplex requires SCO playback")
     token = bytes.fromhex(args.token.read_text().strip())
     if len(token) != 16:
         raise ValueError("talkback token must contain 32 hex digits")
-    TalkbackReceiver(token, bind=("0.0.0.0", args.port), duplex=args.duplex).serve()
+    TalkbackReceiver(token, bind=("0.0.0.0", args.port), duplex=args.duplex,
+                     playback_profile=args.playback_profile).serve()
 
 
 if __name__ == "__main__":

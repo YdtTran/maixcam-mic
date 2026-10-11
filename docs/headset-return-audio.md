@@ -22,6 +22,12 @@ headset is selected, capture fails, or the legacy talkback pause is active.
 
 ## Verified here and pending on hardware
 
+**Current SCO follow-up (2026-10-11):** The experimental branch now has audible
+full duplex confirmed by the user, with return quality still below talkback.
+It uses explicit SCO playback timing and a controller MTU workaround. See the
+[SCO trial guide](sco-duplex.md) and [session evidence](sessions/2026-10-11-sco-duplex.md).
+The historical deployment limitations below describe earlier sessions.
+
 Direct PC deployment subsequently succeeded: see [the deployment log](sessions/2026-10-10-headset-deployment.md).
 The native operator now runs TCP/video plus UDP8004 return from the existing
 camera sender. Real Chromium decoded video and received PCMU with its audio

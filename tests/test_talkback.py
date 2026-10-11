@@ -11,6 +11,46 @@ from maix.talkback_receiver import TalkbackReceiver, valid_packet
 
 
 class TalkbackTests(unittest.TestCase):
+    def test_sco_packet_gaps_feed_silence_at_audio_rate_without_restarting_player(self):
+        receiver = TalkbackReceiver(b"a" * 16, duplex=True)
+        receiver.last_packet = .001
+        receiver.player = Mock()
+        receiver._player = Mock(return_value=receiver.player)
+        receiver._pause_mic = Mock()
+        receiver.stop = Mock()
+        receiver.jitter.pop = Mock(return_value=None)
+        now = [0.0]
+        closing = Mock()
+        def wait(seconds):
+            now[0] += seconds
+            return now[0] >= .11
+        closing.wait.side_effect = wait
+        with patch("maix.talkback_receiver.time.monotonic", side_effect=lambda: now[0]), \
+                patch("maix.talkback_receiver.os.write", return_value=320) as write:
+            receiver._playback(closing)
+        self.assertGreaterEqual(write.call_count, 4)
+        self.assertLessEqual(write.call_count, 6)
+        self.assertTrue(all(call.args[1] == bytes(320) for call in write.call_args_list))
+        receiver.stop.assert_not_called()
+
+    def test_sco_duplex_uses_frame_sized_playback_period_without_pausing_capture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pause = Path(directory) / "pause"
+            spawn = Mock(return_value=Mock())
+            receiver = TalkbackReceiver(b"a" * 16, spawn=spawn, duplex=True,
+                                       pause_path=pause, ack_path=Path(directory) / "ack")
+            receiver._pause_mic()
+            self.assertFalse(pause.exists())
+            with patch("maix.talkback_receiver.os.set_blocking", create=True):
+                receiver._player()
+            command = spawn.call_args.args[0]
+            self.assertEqual(command[command.index("--period-time") + 1], "20000")
+            self.assertEqual(command[command.index("--buffer-time") + 1], "80000")
+
+    def test_duplex_rejects_a2dp_playback(self):
+        with self.assertRaisesRegex(ValueError, "requires SCO"):
+            TalkbackReceiver(b"a" * 16, duplex=True, playback_profile="a2dp")
+
     def test_pause_allows_capture_termination_timeout_before_ack(self):
         with tempfile.TemporaryDirectory() as directory:
             pause = Path(directory) / "pause"

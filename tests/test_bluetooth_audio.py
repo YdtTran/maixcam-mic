@@ -7,6 +7,113 @@ from maix.bluetooth_audio import BluetoothAudioConnector, LEGACY_ROUTE_MARKER, R
 
 
 class BluetoothAudioConnectorTests(unittest.TestCase):
+    def test_failed_sco_reset_obeys_cooldown_and_blocks_reconnect_in_that_attempt(self):
+        commands = []
+        now = [30.0]
+        def run(command, timeout=20):
+            commands.append(command)
+            if command[0] == "hcitool":
+                return 0, "< eSCO 28:52:E0:16:73:CE handle 384 state 8"
+            if command[-1] == "reset": return 1, "failed"
+            return 0, "Paired: yes\nTrusted: yes\nConnected: yes"
+        with tempfile.TemporaryDirectory() as directory:
+            connector = BluetoothAudioConnector("28:52:E0:16:73:CE", run=run,
+                                                config_path=Path(directory) / "alsa", playback_profile="sco",
+                                                recover_stuck_sco=True, monotonic=lambda: now[0])
+            connector.stuck_sco_since = 0
+            self.assertFalse(connector.attempt())
+            self.assertFalse(any(c[0] == "bluetoothctl" for c in commands))
+            now[0] = 40
+            connector.attempt()
+            self.assertEqual(sum(c[-1] == "reset" for c in commands), 1)
+
+    def test_stuck_sco_recovery_waits_for_persistent_state_and_restores_mtu(self):
+        now = [0.0]
+        commands = []
+        mtu = [120]
+        def run(command, timeout=20):
+            commands.append(command)
+            if command[0] == "hcitool":
+                return 0, "< eSCO 28:52:E0:16:73:CE handle 384 state 8 lm CENTRAL"
+            if command[0] == "hciconfig":
+                if command[-1] == "reset":
+                    mtu[0] = 255
+                elif "scomtu" in command:
+                    mtu[0] = 120
+                return 0, f"SCO MTU: {mtu[0]}:4"
+            return 0, "Paired: yes\nTrusted: yes\nConnected: yes"
+        with tempfile.TemporaryDirectory() as directory:
+            connector = BluetoothAudioConnector("28:52:E0:16:73:CE", run=run,
+                                                config_path=Path(directory) / "alsa", playback_profile="sco",
+                                                sco_mtu=120, recover_stuck_sco=True, monotonic=lambda: now[0])
+            connector.attempt()
+            now[0] = 29
+            connector.attempt()
+            self.assertFalse(any(c[-1] == "reset" for c in commands))
+            now[0] = 30
+            connector.attempt()
+            self.assertEqual(mtu[0], 120)
+            now[0] = 31
+            connector.attempt()
+            now[0] = 61
+            connector.attempt()
+            self.assertEqual(sum(c[-1] == "reset" for c in commands), 1)
+
+    def test_stuck_sco_recovery_refuses_other_devices_and_unknown_status(self):
+        for output, code in [("< eSCO 28:52:E0:16:73:CE handle 384 state 8\n> ACL AA:BB:CC:DD:EE:FF handle 1 state 1", 0),
+                             ("unavailable", 1)]:
+            commands = []
+            def run(command, timeout=20):
+                commands.append(command)
+                if command[0] == "hcitool": return code, output
+                return 0, "Paired: yes\nTrusted: yes\nConnected: yes"
+            with tempfile.TemporaryDirectory() as directory:
+                connector = BluetoothAudioConnector("28:52:E0:16:73:CE", run=run,
+                                                    config_path=Path(directory) / "alsa", playback_profile="sco",
+                                                    recover_stuck_sco=True)
+                connector.stuck_sco_since = -100
+                connector.attempt()
+                self.assertFalse(any(c[-1] == "reset" for c in commands))
+
+    def test_stuck_sco_recovery_requires_explicit_sco_profile(self):
+        with self.assertRaises(ValueError):
+            BluetoothAudioConnector("28:52:E0:16:73:CE", recover_stuck_sco=True)
+
+    def test_sco_mtu_override_preserves_packet_count_and_avoids_repeated_mutations(self):
+        commands = []
+        current = [255]
+        def run(command, timeout=20):
+            commands.append(command)
+            if command[:2] == ["hciconfig", "hci0"]:
+                if len(command) == 4:
+                    current[0] = int(command[3].split(":")[0])
+                return 0, f"SCO MTU: {current[0]}:4"
+            return 0, "Paired: yes\nTrusted: yes\nConnected: yes"
+        with tempfile.TemporaryDirectory() as directory:
+            connector = BluetoothAudioConnector("28:52:E0:16:73:CE", run=run,
+                                                config_path=Path(directory) / "alsa",
+                                                playback_profile="sco", sco_mtu=120)
+            self.assertTrue(connector.attempt())
+            self.assertTrue(connector.attempt())
+        self.assertEqual([c for c in commands if "scomtu" in c], [["hciconfig", "hci0", "scomtu", "120:4"]])
+
+    def test_failed_sco_mtu_override_does_not_change_route(self):
+        def run(command, timeout=20):
+            if command[0] == "hciconfig":
+                return (0, "SCO MTU: 255:4") if len(command) == 2 else (1, "denied")
+            return 0, ""
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "alsa"
+            connector = BluetoothAudioConnector("28:52:E0:16:73:CE", run=run, config_path=config,
+                                                playback_profile="sco", sco_mtu=120)
+            self.assertFalse(connector.attempt())
+            self.assertFalse(config.exists())
+
+    def test_sco_mtu_override_is_explicit_and_even(self):
+        for profile, mtu in [("a2dp", 120), ("sco", 255), ("sco", 0)]:
+            with self.subTest(profile=profile, mtu=mtu), self.assertRaises(ValueError):
+                BluetoothAudioConnector("28:52:E0:16:73:CE", playback_profile=profile, sco_mtu=mtu)
+
     def test_connected_trusted_headset_is_not_reconfigured_each_poll(self):
         commands = []
         def run(command, timeout=20):
@@ -19,6 +126,7 @@ class BluetoothAudioConnectorTests(unittest.TestCase):
             self.assertTrue(connector.attempt())
         mutations = [c for c in commands if c[0] == "bluetoothctl" and c[1] != "info"]
         self.assertEqual(mutations, [])
+        self.assertFalse(any(c[0] == "hcitool" for c in commands))
 
     def test_failed_status_query_does_not_attempt_pair_or_connect(self):
         commands = []

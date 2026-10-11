@@ -5,6 +5,23 @@ to detailed evidence; session logs preserve the history. Last updated: 2026-10-1
 
 ## Current State and User Decisions
 
+- **SCO duplex trial (2026-10-11):** User requested a separate branch and
+  sustained SCO investigation. `experiment/sco-duplex` starts from accepted
+  recovery commit `4e8aafb` on clean `uplink-audio`. User confirmed simultaneous
+  browser speech in both directions and accepted it as hearable, authorizing
+  this checkpoint commit; Maix-to-PC quality remains bad.
+  Live camera trial uses SCO/CVSD, 120-byte SCO MTU, and 20ms/80ms raw playback
+  with paced silence during packet gaps. Twenty automated WHIP cycles connected;
+  one earlier attempt failed strict camera clock calibration. Return HCI packets
+  include invalid/no-data flags; exact cause remains unresolved. Opt-in scoped
+  stuck-SCO recovery has regression coverage; a live normal disconnect recovered
+  in27 seconds without triggering reset. A60-second hold connected but still
+  logged underruns. 101 tests OK, two skipped. TCP/video,
+  UDP8004 return and video-only recordings preserved. Boot remains A2DP;
+  separate SCO template is uninstalled. No physical latency gain measured.
+  See [SCO trial log](docs/sessions/2026-10-11-sco-duplex.md) and
+  [procedure/rollback](docs/sco-duplex.md).
+
 - **Audio recovery (2026-10-11, approximately 08:58 local):** Both audio routes
   failed with a stuck eSCO link and capture hw-parameter errors. Scoped audio
   restarts and reconnect did not recover SCO; resetting only hci0 restored

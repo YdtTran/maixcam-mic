@@ -1,6 +1,6 @@
 # WorkerCam Admin / MaixCAM RTSP operator
 
-This project relays MaixCAM video, PC talkback, and independent earbuds microphone return to a local web operator page. Microphone return is implemented and tested with synthetic media; physical earbuds capture and duplex validation remain pending. The PC side runs MediaMTX, FFmpeg, recording, and the operator server, either natively on Windows or in a Linux container. MaixCAM keeps its camera and Bluetooth programs on the physical device.
+This project relays MaixCAM video, PC talkback, and independent earbuds microphone return to a local web operator page. Physical return and experimental SCO full duplex have been confirmed audibly; return quality still needs improvement. The PC side runs MediaMTX, FFmpeg, recording, and the operator server, either natively on Windows or in a Linux container. MaixCAM keeps its camera and Bluetooth programs on the physical device.
 
 The operator page is now a React/TypeScript WorkerCam Admin interface with Live Workers, Recordings, and Settings. Sign in with `admin` / `admin`. Worker #07 connects to the physical camera; Worker #12 is a local demo. Login and the generic worker database are frontend prototypes (sessionStorage and IndexedDB); server authentication and database APIs remain future backend work. See [frontend/README.md](frontend/README.md) for development, data boundaries, and API integration.
 
@@ -143,7 +143,7 @@ The publisher and recorder remove empty H.264 NAL units emitted by this MaixCAM.
 
 The microphone behavior described below reflects the legacy A2DP/pause defaults
 and earlier deployment experiments. Independent microphone return is now
-implemented; physical deployment and SCO duplex validation remain pending.
+implemented and deployed; the user confirmed audible experimental SCO duplex.
 Follow [the return guide](docs/headset-return-audio.md) for the direct RTP route
 and optional duplex settings. Keep current camera video services.
 
@@ -209,4 +209,7 @@ are in [the headset return guide](docs/headset-return-audio.md). The native help
 now enables a separate PCMU receiver on UDP 8004; `/maix01` and recordings stay
 video-only. Use `-ReturnAudioPort 0` for a video-only baseline. The default camera
 talkback still pauses microphone capture; simultaneous speech requires verified
-SCO duplex and the explicit camera options described in that guide.
+SCO duplex and the explicit camera options described in that guide. The
+`experiment/sco-duplex` branch provides a user-tested, audible full-duplex trial
+with 120-byte controller packets and explicit SCO buffering. Return quality
+remains poor; default A2DP startup is preserved. See [SCO procedure and rollback](docs/sco-duplex.md).
