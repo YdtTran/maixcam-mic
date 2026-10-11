@@ -11,6 +11,43 @@ from maix.talkback_receiver import TalkbackReceiver, valid_packet
 
 
 class TalkbackTests(unittest.TestCase):
+    def test_pause_allows_capture_termination_timeout_before_ack(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pause = Path(directory) / "pause"
+            ack = Path(directory) / "ack"
+            receiver = TalkbackReceiver(b"a" * 16, pause_path=pause, ack_path=ack)
+            now = [0.0]
+
+            def wait(seconds):
+                now[0] += seconds
+                # stop_process waits two seconds before killing a stuck arecord.
+                if now[0] >= 2.1:
+                    ack.touch()
+
+            with patch("maix.talkback_receiver.time.monotonic", side_effect=lambda: now[0]), \
+                    patch("maix.talkback_receiver.time.sleep", side_effect=wait):
+                receiver._pause_mic()
+            self.assertTrue(pause.exists())
+            self.assertTrue(ack.exists())
+            receiver.stop()
+
+    def test_unresponsive_capture_pause_is_bounded_and_released(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pause = Path(directory) / "pause"
+            receiver = TalkbackReceiver(b"a" * 16, pause_path=pause,
+                                       ack_path=Path(directory) / "ack")
+            now = [0.0]
+
+            def wait(seconds):
+                now[0] += seconds
+
+            with patch("maix.talkback_receiver.time.monotonic", side_effect=lambda: now[0]), \
+                    patch("maix.talkback_receiver.time.sleep", side_effect=wait), \
+                    self.assertRaisesRegex(RuntimeError, "did not pause"):
+                receiver._pause_mic()
+            self.assertFalse(pause.exists())
+            self.assertLess(now[0], 4)
+
     def test_sender_keeps_audio_rate_with_coarse_windows_waits(self):
         relay = TalkbackRelay(b"a" * 16, ("127.0.0.1", 9002), udp_socket=Mock())
         now = [0.0]

@@ -44,6 +44,9 @@ def capture_command(mac):
     return [
         "arecord", "-q", "-D", f"bluealsa:DEV={mac},PROFILE=sco",
         "-t", "raw", "-f", "S16_LE", "-r", "8000", "-c", "1",
+        # Match the RTP frame cadence. The default 125ms period arrives in
+        # bursts that the bounded newest-frame queue trims into silence gaps.
+        "--period-time", "20000", "--buffer-time", "80000",
     ]
 
 

@@ -49,7 +49,9 @@ class TalkbackReceiver:
             return
         self.ack_path.unlink(missing_ok=True)
         self.pause_path.touch()
-        deadline = time.monotonic() + 2
+        # Capture shutdown waits up to two seconds before killing a stuck
+        # arecord. Allow that cleanup to finish before requiring its ack.
+        deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
             if self.ack_path.exists():
                 return

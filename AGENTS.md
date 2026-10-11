@@ -5,6 +5,18 @@ to detailed evidence; session logs preserve the history. Last updated: 2026-10-1
 
 ## Current State and User Decisions
 
+- **Audio recovery (2026-10-11, approximately 08:58 local):** Both audio routes
+  failed with a stuck eSCO link and capture hw-parameter errors. Scoped audio
+  restarts and reconnect did not recover SCO; resetting only hci0 restored
+  sound. User confirmed both directions, A2DP talkback working perfectly, but
+  noisy/choppy return. Fixed receiver pause deadline race (3s vs capture's
+  2s termination wait). Requested 20ms capture periods/80ms buffer: exact-zero
+  return frames fell from 252/300 to 13/298, then 2/300 in short samples. User
+  reports much smoother return, still below talkback quality. No physical
+  latency improvement measured. A2DP/half-duplex,
+  TCP/video and recording unchanged. 91 tests OK, two skipped. See
+  [audio recovery log](docs/sessions/2026-10-11-audio-recovery.md).
+
 - **Stage 1 SCO validation (2026-10-11):** Live USB inspection confirmed
   SCO/CVSD playback and capture at 8kHz mono. Two isolated SCO tone tests
   exited successfully, but the user reported interrupted SCO sound. Two
