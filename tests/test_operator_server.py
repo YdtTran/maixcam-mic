@@ -10,6 +10,7 @@ class RecordingManagerTests(unittest.TestCase):
     def test_default_recordings_directory_is_project_relative(self):
         manager = RecordingManager()
         self.assertEqual(manager.directory, PROJECT_ROOT / "recordings")
+        self.assertEqual(manager.recording_mode, "multistream")
         manager._recording_id = "20260917T000000Z_12345678"
         manager._process = Mock()
         manager._process.poll.return_value = None
@@ -28,7 +29,7 @@ class RecordingManagerTests(unittest.TestCase):
                 Path(command[-1]).write_bytes(b"recorded")
                 return process
 
-            manager = RecordingManager(Path(directory), spawn=spawn)
+            manager = RecordingManager(Path(directory), spawn=spawn, recording_mode="legacy")
             active = manager.start()
             try:
                 self.assertTrue(active["recording"])
@@ -49,7 +50,7 @@ class RecordingManagerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             process = Mock()
             process.poll.return_value = None
-            manager = RecordingManager(Path(directory), spawn=lambda *a, **kw: process)
+            manager = RecordingManager(Path(directory), spawn=lambda *a, **kw: process, recording_mode="legacy")
             manager.start()
             with self.assertRaisesRegex(RuntimeError, "already active"):
                 manager.start()
@@ -59,7 +60,7 @@ class RecordingManagerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             manager = RecordingManager(Path(directory))
             with self.assertRaises(ValueError):
-                manager.recording_path("../auto.key")
+                manager.recording_path("../README.md")
 
 
 if __name__ == "__main__":

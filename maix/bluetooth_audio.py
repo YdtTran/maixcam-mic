@@ -99,12 +99,22 @@ class BluetoothAudioConnector:
         self.stuck_sco_since = None
         return True
 
-    def attempt(self):
-        self._start_bluealsa()
-        if self.recover_stuck_sco and not self._recover_sco():
-            return False
+    def prepare_sco(self):
+        """Initialize the controller before setting the MTU used by new sockets."""
         if self.sco_mtu is not None:
             code, info = self.run(["hciconfig", "hci0"])
+            if code != 0:
+                return False
+            if not re.search(r"^\s*UP\b", info, re.MULTILINE):
+                code, output = self.run(["hciconfig", "hci0", "up"], timeout=5)
+                if code != 0:
+                    print("SCO controller power-up pending:", output.strip(), flush=True)
+                    return False
+                # Power-up reads the controller's original buffer size, replacing
+                # overrides made while DOWN. Read it again after initialization.
+                code, info = self.run(["hciconfig", "hci0"])
+                if code != 0 or not re.search(r"^\s*UP\b", info, re.MULTILINE):
+                    return False
             size = re.search(r"SCO MTU:\s*(\d+):(\d+)", info)
             if code != 0 or size is None:
                 print("SCO MTU status unavailable", flush=True)
@@ -116,7 +126,19 @@ class BluetoothAudioConnector:
                     return False
                 # Existing SCO sockets retain their MTU. Do not reset a healthy
                 # link here; apply before capture starts or reopen audio once.
-                print("SCO MTU configured; existing audio sockets need reopening", flush=True)
+                print("SCO MTU configured; existing audio sockets retain their previous size", flush=True)
+            code, verified = self.run(["hciconfig", "hci0"])
+            if (code != 0 or not re.search(r"^\s*UP\b", verified, re.MULTILINE)
+                    or not re.search(r"SCO MTU:\s*" + str(self.sco_mtu) + r":", verified)):
+                return False
+        return True
+
+    def attempt(self):
+        if self.recover_stuck_sco and not self._recover_sco():
+            return False
+        if not self.prepare_sco():
+            return False
+        self._start_bluealsa()
         code, info = self.run(["bluetoothctl", "info", self.mac])
         if code != 0:
             print("Headset status unavailable:", info.strip(), flush=True)
@@ -171,12 +193,22 @@ def main():
                         help="Opt-in controller workaround; validated MaixCAM CVSD size is 120 bytes")
     parser.add_argument("--recover-stuck-sco", action="store_true",
                         help="Opt-in hci0 reset after bound headset SCO stays in state 8 for 30s; no other links allowed")
+    parser.add_argument("--prepare-sco", action="store_true",
+                        help="Prepare powered controller and verified MTU before starting audio clients; exit after one attempt")
     parser.add_argument("--token", type=Path, default=Path("/root/.talkback_token"))
     args = parser.parse_args()
     if args.sco_mtu is not None and (args.playback_profile != "sco" or not 2 <= args.sco_mtu <= 254 or args.sco_mtu % 2):
         parser.error("--sco-mtu requires --playback-profile sco and an even size from 2 to 254")
     if args.recover_stuck_sco and args.playback_profile != "sco":
         parser.error("--recover-stuck-sco requires --playback-profile sco")
+    if args.prepare_sco:
+        if args.playback_profile != "sco" or args.sco_mtu is None or not args.fixed_mac:
+            parser.error("--prepare-sco requires --fixed-mac, --playback-profile sco and --sco-mtu")
+        connector = BluetoothAudioConnector(args.fixed_mac, playback_profile="sco", sco_mtu=args.sco_mtu)
+        if not connector.prepare_sco():
+            raise SystemExit(1)
+        connector._route_playback()
+        return
     token = args.token.read_text().strip()
     if len(bytes.fromhex(token)) != 16:
         raise ValueError("control token must contain 32 hex digits")

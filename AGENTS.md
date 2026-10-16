@@ -1,9 +1,129 @@
 # Project Brain and Index
 
 Read this file first when resuming work. It records current decisions and points
-to detailed evidence; session logs preserve the history. Last updated: 2026-10-11.
+to detailed evidence; session logs preserve the history. Last updated: 2026-10-16.
 
 ## Current State and User Decisions
+
+- **Architecture reference and safe local cleanup (2026-10-16):** User reports
+  the architecture works well and requests documentation without code changes.
+  Added source-checked architecture/pipeline/protocol reference and rendered
+  diagram. Preserved all existing source/configuration edits and live services.
+  Permanent cleanup was rejected by automatic approval policy; moved six
+  disposable cache/build/test-output directories (46 files, 1,576,087 bytes) into
+  ignored `.runtime/cleanup-quarantine-2026-10-16/` for reversible cleanup instead.
+  Settings, token, recordings, dependencies, packaged UI and session evidence
+  retained. See [architecture](docs/architecture.md) and
+  [session log](docs/sessions/2026-10-16-architecture-cleanup.md).
+
+- **SCO/multistream deployed (2026-10-11):** User requested README update and
+  redeployment of both devices. Combined workflow installed/rebooted MaixCAM
+  with SCO and rebuilt/recreated the healthy Docker PC with multistream.
+  Windows HTTP passed; browser peers read H264 video and G711 headset return.
+  Camera eSCO connected, MTU120:4, one capture; PC Bluetooth connected and
+  talkback available. No recording/audio acceptance trial performed. See
+  [redeployment log](docs/sessions/2026-10-11-sco-multimedia-redeployment.md).
+
+- **SCO and multimedia defaults (2026-10-11):** User requested SCO and multimedia
+  as the default pipeline, reporting SCO already in use. Multimedia means the
+  existing multistream recorder: video plus mixed/worker/operator audio. Compose,
+  `.env.example`, local `.env`, app and recorder defaults now select multistream;
+  camera startup fallback also selects SCO. Explicit legacy/A2DP remain available.
+  TCP/video monitoring and independent UDP8004 return are preserved. Suite ran
+  123 tests successfully with five skips; Compose validation passed. No services
+  restarted; recording changes activate at the next PC rebuild/deployment. See
+  [default pipeline log](docs/sessions/2026-10-11-sco-multimedia-default.md).
+
+- **SCO deployment defaults aligned (2026-10-11):** User reiterated recovered
+  SCO setup is the default. `deploy_maix.ps1` and `run_all.ps1` now default
+  `AudioProfile` to `sco`; explicit `a2dp` remains fallback. README and installer
+  guides agree and include safe missing-headsetmic recovery. Legacy recording
+  remains default, multistream optional. Ten deployment checks passed. No runtime
+  restart in this update. Supersedes the earlier docs-only/A2DP script-default
+  decision below. See [default update log](docs/sessions/2026-10-11-readme-sco-default.md).
+
+- **Headset return recovery (2026-10-11,08:34–08:39 UTC):** User authorized
+  fixing the outage. Safe PC stop/start restored UDP8004 publication and browser
+  audio connection. Headset reconnect remained busy; scoped reset attempt lost
+  camera access, then user hard-rebooted camera. After reconnect retries, SCO
+  capture returned. Final six-second `/headsetmic` decode produced48000 samples,
+  34190 nonzero; no new return loss in inspected post08:38:30 logs. Docker healthy,
+  SCO120, talkback available. Audible user confirmation pending; underlying
+  forwarding/profile failure causes remain unproven. No source fix in this
+  recovery. See [outage/recovery evidence](docs/sessions/2026-10-11-headsetmic-outage.md).
+
+- **Headset return outage (2026-10-11,08:31–08:32 UTC):** User pasted missing
+  `/headsetmic` stream errors. Read-only checks found no SCO link, capture
+  PCM-not-found retries, and PC receiver publication timeout/backoff. Camera
+  still sends UDP8004 packets; eight-second container check saw none during
+  receiver backoff. Addressing unchanged, Docker API healthy; no repair done.
+  Cause of packet delivery loss remains unisolated. See
+  [outage evidence](docs/sessions/2026-10-11-headsetmic-outage.md).
+
+- **README standard SCO pipeline (2026-10-11):** User requested README use SCO
+  duplex as the default pipeline. Camera and combined deployment examples now
+  explicitly pass `-AudioProfile sco`, explain simultaneous listening/talkback,
+  post-reboot checks and A2DP fallback. This documentation change does not alter
+  script parameter defaults (A2DP when omitted), recordings or live services.
+  See [README update log](docs/sessions/2026-10-11-readme-sco-default.md).
+
+- **SCO boot-order repair (2026-10-11):** User requested root-cause fix.
+  Traced boot confirmed MTU120 applied while down, power-up resetting to255,
+  capture/eSCO opening at255, and connector overriding too late. SCO boot now
+  synchronously powers/prepares/verifies MTU before audio clients start. Tests
+  cover reset ordering and failed preparation; actual shell retry test passed.
+  Fixed traced reboot opened capture/eSCO only at120; user confirmed steady
+  WHIP tone without manual reconnect. Production probe removed; second clean
+  reboot verified connected SCO120, stable capture and successful WHIP relay.
+  Final suite121 tests/five skips; POSIX startup test separately passed in Docker.
+  See [repair evidence](docs/sessions/2026-10-11-sco-boot-order.md).
+
+- **SCO talkback recovery (2026-10-11):** User authorized a fix. Headset was
+  connected and unmuted but initial WHIP tone was inaudible. Clean pause/ack,
+  scoped headset disconnect/reconnect and capture resume restored delivery;
+  user confirmed a steady tone through a 20-second browser-path WHIP test.
+  Source, video, PC runtime and recording mode unchanged. Exact silent-link
+  cause and prolonged stability remain unproven. See
+  [recovery evidence](docs/sessions/2026-10-11-readme-redeployment.md).
+
+- **Post-reboot SCO check (2026-10-11):** User rebooted camera. Read-only check
+  confirmed one SCO connector, duplex receiver, microphone sender and SCO capture;
+  eSCO connected, MTU 120:4. PC healthy, Bluetooth connected, talkback available;
+  video/return republished after reboot. Persistent audio logs contain errors
+  without enough timestamps to assign them to this boot. No fixes performed;
+  audible duplex unverified. See
+  [redeployment evidence](docs/sessions/2026-10-11-readme-redeployment.md).
+
+- **SCO redeployment follow-up (2026-10-11):** User requested SCO duplex.
+  Combined deployment with `-AudioProfile sco` passed camera reboot/video-port,
+  Docker build/health and Windows HTTP checks. Camera configuration confirmed
+  SCO in both directions at 8 kHz mono and MTU 120:4. Extra process inspection
+  failed on unsupported BusyBox `ps -ww`; stopped checks without fixes as
+  requested. Audible duplex remains unverified. See
+  [redeployment evidence](docs/sessions/2026-10-11-readme-redeployment.md).
+
+- **README redeployment (2026-10-11):** User requested both devices redeployed
+  with failures reported and no fixes. Combined README workflow completed:
+  MaixCAM installed/rebooted with default A2DP and PC destination 10.127.9.237;
+  Docker rebuilt/recreated, healthy, Windows HTTP verified and browser opened.
+  Logs confirmed online H.264 video and G.711 return. Audible checks remain
+  untested. See [redeployment evidence](docs/sessions/2026-10-11-readme-redeployment.md).
+
+- **Docker deployment cleanup (2026-10-11):** User chose Docker for all PC
+  deployment and exactly four PowerShell entry points: `deploy_maix.ps1`,
+  `deploy_pc.ps1`, `stop_docker_pc.ps1`, `run_all.ps1`. One Compose configuration
+  now defaults to TCP/video plus independent UDP8004 return, with local browser
+  port publication. Camera programs remain on MaixCAM; one parameterized boot
+  template supports A2DP by default and opt-in experimental SCO. Generated HTML
+  and the local pairing token are no longer tracked. README is a customer guide
+  with actual demo screenshots. This supersedes older native startup instructions
+  below; those entries retain the history. See
+  [deployment cleanup evidence](docs/sessions/2026-10-11-docker-cleanup.md).
+
+- **Repository cleanup (2026-10-11):** Removed two obsolete implementation prompts
+  and unreferenced `auto.key`. Retained runtime files, packaged UI, diagnostic
+  tools, package markers and session evidence. No live services changed. See
+  [cleanup log](docs/sessions/2026-10-11-repository-cleanup.md).
 
 - **PC multistream recorder (2026-10-11):** Implemented opt-in
   `--recording-mode multistream` / native `-RecordingMode multistream`. Independent
@@ -153,13 +273,14 @@ to detailed evidence; session logs preserve the history. Last updated: 2026-10-1
 | Read this | For |
 |---|---|
 | [README.md](README.md) | Current configuration, startup and project overview |
+| [Architecture and protocols](docs/architecture.md) | Current Docker/SCO architecture, four data pipelines, port map, TB2 format and storage boundaries |
 | [Docker run guide](docs/docker-run-guide.md) | Installation and operational troubleshooting; apply the current README settings when older guide defaults differ |
 | [Transport and measurement guide](docs/rtsp-transport.md) | TCP/UDP selection, isolated modes, physical stopwatch capture and timing diagnostics |
 | [Measured results](docs/rtsp-measurements.md) | Physical latency, packet/continuity metrics, evidence and limitations |
 | [2026-10-10 session log](docs/sessions/2026-10-10-rtsp-latency.md) | Investigation history, final user decision and next steps |
 | [UDP protocol/deployment history](docs/udp-media.md) | Earlier UDP validation, protocol details and fallback |
 | [Frontend guide](frontend/README.md) | UI development, API and persistence boundaries |
-| [Multistream recording](docs/multistream-recording.md) | Opt-in PC recorder, timeline strategy, four-track MP4, recovery and physical acceptance procedure |
+| [Multistream recording](docs/multistream-recording.md) | Default PC recorder, timeline strategy, four-track MP4, recovery and physical acceptance procedure |
 | [Headset return guide](docs/headset-return-audio.md) | Independent microphone return, duplex prerequisites, exact device/Windows commands and pending hardware checks |
 | [Headset implementation log](docs/sessions/2026-10-10-headset-return.md) | Code changes, synthetic verification and unchanged live runtime |
 | [Headset deployment log](docs/sessions/2026-10-10-headset-deployment.md) | Active native runtime, real camera RTP/browser delivery and remaining SSH/duplex limitation |
@@ -216,19 +337,25 @@ This project relays MaixCAM video and Bluetooth headset audio to the WorkerCam A
 
 Run these from the repository root:
 
-- Current working Windows route: `./start_operator.ps1` (`-Build` rebuilds frontend). It reads the three relevant `.env` settings, stops only the Docker operator if needed, reuses matching native operation and checks Windows HTTP access. Native defaults are TCP/video.
-- `./stop_operator.ps1`: stop native project processes after stopping recording; rejects an active recording. Direct native alternative: `python app.py --maix-ip 192.168.1.7 --rtsp-transport tcp --stream-mode video` after stopping prior stacks.
-- `./start_docker.ps1` (or `-Build`): start the Docker host-network route with saved `.env` settings after stopping native services; Windows localhost access on that route remains unresolved.
-- `docker compose -f compose.yaml -f compose.host.yaml up --build -d`: build and start the host-network PC services directly.
-- `docker compose logs -f`: inspect service logs; `docker compose down` stops services.
-- `python app.py --rtsp-transport tcp --stream-mode video`: run the current configuration directly on Windows with FFmpeg on `PATH` and `mediamtx.exe` beside `app.py`; stop Docker first.
-- `python -m unittest discover -s tests -v`: run Python tests.
+- `./run_all.ps1`: start the Docker PC service and open its local browser UI.
+- `./deploy_pc.ps1 -Build`: build/update the Docker image after changes. Refuses
+  active recordings and verifies container health plus Windows HTTP access.
+- `./stop_docker_pc.ps1`: stop only this project's container after recording and
+  finalization complete; retains saved recordings.
+- `./deploy_maix.ps1 -MaixHost <address> -PcIp <PC-LAN-IP> -HeadsetMac <MAC>
+  -HostKey <verified-key> -Reboot`: install camera programs with backups, then
+  activate by reboot. Requires a prepared camera and PuTTY. Default SCO;
+  A2DP fallback requires explicit `-AudioProfile a2dp`.
+- `docker compose config --quiet`: validate the single Compose configuration.
+- `docker compose logs --tail 80 server`: inspect PC service logs.
+- `python -m unittest discover -s tests -v`: run developer Python checks. Local
+  Python/media tools are development dependencies, not customer requirements.
 
 Run these from `frontend/`:
 
 - `npm ci`: install locked dependencies.
 - `npm run dev`: start Vite; `/api` proxies to the separately running PC server on port 8000.
-- `npm run build`: type-check and build the self-contained `pc/operator_test.html`. Regenerate this file after UI changes.
+- `npm run build`: type-check and generate ignored `pc/operator_test.html`. Docker generates it during image builds; do not commit the compiled copy.
 - `npx playwright install chromium`: install the browser required by tests.
 - `npm test`: build and test both source and compiled interfaces.
 

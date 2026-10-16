@@ -1,8 +1,0 @@
-#!/bin/sh
-# Opt-in MaixCAM/AIC CVSD trial. Keep the original rc.local for A2DP rollback.
-# Apply before any SCO client opens: existing sockets retain their old MTU.
-export HOME=/root
-hciconfig hci0 scomtu 120:4 || exit 1
-nohup python3 /root/bluetooth_audio.py --fixed-mac 6C:16:29:7B:00:D4 --playback-profile sco --sco-mtu 120 --recover-stuck-sco </dev/null >>/root/bluetooth-audio-sco.log 2>&1 &
-nohup python3 /root/talkback_receiver.py --duplex --playback-profile sco </dev/null >>/root/talkback-receiver-sco.log 2>&1 &
-nohup python3 /root/headset_mic_stream.py --target 192.168.1.4 --rtp-port 8004 </dev/null >>/root/headset-mic-stream.log 2>&1 &

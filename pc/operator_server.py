@@ -26,7 +26,7 @@ RECORDING_ID = re.compile(r"^[0-9]{8}T[0-9]{6}Z_[0-9a-f]{8}$")
 
 class RecordingManager:
     def __init__(self, directory=DEFAULT_RECORDINGS, source="rtsp://127.0.0.1:8554/maix01", spawn=subprocess.Popen,
-                 transport="udp", mode="combined", recording_mode="legacy"):
+                 transport="udp", mode="combined", recording_mode="multistream"):
         if transport not in ("tcp", "udp") or mode not in ("video", "audio", "combined"):
             raise ValueError("Invalid transport or stream mode")
         self.transport = transport
@@ -331,7 +331,7 @@ def main():
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--source", default="rtsp://127.0.0.1:8554/maix01")
     parser.add_argument("--recordings", type=Path, default=DEFAULT_RECORDINGS)
-    parser.add_argument("--recording-mode", choices=("legacy", "multistream"), default="legacy")
+    parser.add_argument("--recording-mode", choices=("legacy", "multistream"), default="multistream")
     parser.add_argument("--rtsp-transport", choices=("tcp", "udp"), default=os.environ.get("RTSP_TRANSPORT", "udp"))
     parser.add_argument("--talkback-host", required=True, help="MaixCAM IP address for UDP talkback")
     parser.add_argument("--maix-usb-ip", type=ipv4, default=os.environ.get("MAIX_USB_IP") or DEFAULT_USB_IP)

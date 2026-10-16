@@ -46,7 +46,7 @@ class HeadsetIntegrationTests(unittest.TestCase):
                 return child
             relay = TalkbackRelay(b"i" * 16, udp.getsockname(), relay_http=f"http://127.0.0.1:{web}",
                                   relay_rtsp=f"rtsp://127.0.0.1:{rtsp}", transport="tcp")
-            manager = RecordingManager(directory, source=f"rtsp://127.0.0.1:{rtsp}/maix01", transport="tcp", mode="video")
+            manager = RecordingManager(directory, source=f"rtsp://127.0.0.1:{rtsp}/maix01", transport="tcp", mode="video", recording_mode="legacy")
             server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(manager, talkback=relay))
             thread = threading.Thread(target=server.serve_forever)
             thread.start()

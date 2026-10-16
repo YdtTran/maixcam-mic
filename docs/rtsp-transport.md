@@ -1,32 +1,18 @@
 # Configurable RTSP transport and measurement
 
-## Current operation (2026-10-10)
+## Current deployment
 
-The accepted mode is **TCP video-only**, with acceptable video and PC talkback
-latency reported by the user. Earbuds → MaixCAM → PC microphone audio remains
-unimplemented end to end. Preserve the working video/talkback paths.
+The accepted media route is TCP video with independent microphone return on
+UDP 8004. Customer deployment uses `./run_all.ps1` and one `compose.yaml` with
+published ports. Stop through `./stop_docker_pc.ps1` after recording finishes.
+See the [README](../README.md) and [Docker guide](docker-run-guide.md).
 
-The operator now runs natively on Windows because Docker's host-network page
-worked inside the container but Windows could not reach localhost 8000/8889,
-including after Desktop restart and container recreation. Stop the operator
-container before a native startup:
-
-```powershell
-.\start_operator.ps1
-```
-
-The helper stops the Docker operator if running, reads `.env` camera/transport/
-mode settings and verifies Windows HTTP access. It reuses a matching native
-stack. Its PID/logs are in `.runtime/operator-native.*`. Direct `python app.py`
-does not load Compose's `.env`; pass explicit TCP/video flags for a manual run.
-Keep `.env` set to TCP/video for any later Docker retest, and stop recording,
-then run `.\stop_operator.ps1` before starting the operator container. Open
-http://127.0.0.1:8000/operator_test.html. See the [README](../README.md#run-the-configured-stack)
-and [session evidence](sessions/2026-10-10-rtsp-latency.md).
+The trials below document earlier investigations. Their diagnostic tools remain
+available for deliberate measurements; they do not change deployment defaults.
 
 ## Transport controls and experimental modes
 
-The default remains UDP and combined video/audio. `RTSP_TRANSPORT=tcp|udp` (or
+Direct Python diagnostic defaults remain UDP/combined; Compose explicitly selects TCP/video. `RTSP_TRANSPORT=tcp|udp` (or
 `app.py --rtsp-transport`) selects camera ingestion, PC headset RTSP ingestion,
 combined publication, recording ingestion, and the local talkback decoder.
 MediaMTX accepts both transports. WHEP/WHIP and browser ICE remain UDP; the
@@ -65,22 +51,11 @@ direct RTP/UDP microphone command afterward.
 
 Direct `--rtp-port` / `--headset-rtp-port` audio remains UDP. Combining it with
 TCP audio mode is rejected rather than labeling a mixed test as fully TCP.
-For the host-network Compose override, set `HEADSET_RTP_PORT=` in `.env` for
-RTSP audio and `RTSP_TRANSPORT=tcp`; its default remains direct UDP port 8004.
-An explicitly selected UDP/direct-RTP experiment uses `RTSP_TRANSPORT=udp`,
-`HEADSET_RTP_PORT=8004` and the matching device `--rtp-port 8004` command.
-These are historical experiment settings; do not restore them as routine cleanup
-or replace the accepted TCP/video mode without a deliberate test plan.
-The base Compose configuration uses RTSP microphone publication by default.
-
-```powershell
-docker compose config --quiet
-docker compose -f compose.yaml -f compose.host.yaml config --quiet
-```
-
-`pc/run_publisher.ps1 -Transport tcp` also checks camera TCP capability first.
-For a standalone `pc.operator_server`, supply `--rtsp-transport tcp` to select
-the recorder and talkback decoder transport.
+The current Compose deployment publishes fixed microphone UDP ports and uses
+TCP RTSP. The old host-network override and standalone PowerShell publisher
+were removed. Use `docker compose config --quiet` to validate deployment.
+Combined/UDP modes below are isolated diagnostic experiments, not customer
+startup instructions. Do not switch the accepted live route for routine cleanup.
 
 ## Repeatable trials
 
@@ -164,8 +139,9 @@ Repeat identically with TCP, then reverse transport order. The result includes
 median, nearest-rank p95, accepted readings and endpoint drift in ms/s. Hundredths
 display precision is not measurement accuracy: screen refresh, exposure and
 frame cadence add uncertainty. The short current pilot has fewer than 20 clear
-samples per condition, so its p95 is provisional. OCR mode is available by
-omitting `--capture-only`, but rejects unreadable/ambiguous values.
+samples per condition, so its p95 is provisional. Capture now always saves
+images and a CSV for manual reading. The old unreliable OCR mode was removed;
+`--capture-only` remains accepted for compatibility with existing procedures.
 
 Arrival-versus-PTS tracing can compare delay growth at the camera and relay:
 

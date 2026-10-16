@@ -1,6 +1,10 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from pc.measure_video_latency import stopwatch_ms, summarize
+from pc.measure_video_latency import measure, stopwatch_ms, summarize
 from pc.measure_timing import summarize as summarize_timing
 
 
@@ -27,6 +31,21 @@ class VideoLatencyTests(unittest.TestCase):
                                    {"arrival_seconds": 12, "pts_seconds": 9.9}])
         self.assertAlmostEqual(result["drift_ms_per_second"], 10)
         self.assertIsNone(result["absolute_latency_ms"])
+
+    def test_capture_requires_manual_readings_and_never_reports_guessed_latency(self):
+        with TemporaryDirectory() as directory:
+            args = SimpleNamespace(output=Path(directory) / "capture", samples=1,
+                                   transport="tcp", stage="browser-video", interval=1,
+                                   reference_roi=(0, 0, 100, 100), feed_roi=(100, 0, 100, 100))
+            with patch("pc.measure_video_latency.subprocess.run") as run:
+                result = measure(args)
+            self.assertEqual(run.call_count, 3)
+            self.assertTrue(all(call.args[0][0] == "ffmpeg" for call in run.call_args_list))
+            self.assertEqual(result["latency_ms"]["samples"], 0)
+            self.assertEqual(result["rejected_samples"], 1)
+            self.assertIsNone(result["samples"][0]["latency_ms"])
+            self.assertIn("Awaiting manual", result["samples"][0]["error"])
+            self.assertIn("elapsed_seconds,reference,feed", (args.output / "readings.csv").read_text())
 
 
 if __name__ == "__main__":

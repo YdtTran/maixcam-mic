@@ -1,313 +1,156 @@
-# Run the WorkerCam prototype with Docker
+# Docker installation and recovery
 
-This guide runs the PC relay, operator API, recording service, and compiled React UI in one container. The camera and Bluetooth audio programs run on MaixCAM itself. Docker builds the frontend and installs FFmpeg and MediaMTX; you do not need Python, Node, FFmpeg, or `mediamtx.exe` installed on the PC for this route.
+The [customer README](../README.md) covers setup and daily use. This guide is for
+the installer. Deployment now uses one `compose.yaml` with published ports.
+The earlier native launchers and Docker host-network override were removed;
+commands in dated session logs are historical evidence, not current instructions.
 
-## Current Windows access issue and working alternative
+## Requirements and settings
 
-As of 2026-10-10, approximately 19:19, the operator runs **natively on Windows**
-with TCP video-only settings. The Docker operator container is stopped. Windows
-could not reach localhost TCP 8000 or 8889 even though the operator returned
-HTTP 200 inside the host-network container. Desktop host networking was enabled;
-a Desktop restart and operator recreation did not resolve access. The precise
-Docker forwarding cause remains unknown. ThingsBoard and PostgreSQL were
-restarted afterward and are running; PostgreSQL reported healthy.
+- Windows PC: Docker Desktop with Linux containers, PowerShell and Docker Compose
+  supporting `up --wait`. Host networking is not required.
+- Camera installation: PuTTY `plink` and `pscp` supporting `-pwfile`, a verified
+  host-key fingerprint, and root SSH access.
+- Prepared MaixCAM: MaixPy launcher at `/maixapp/apps`, Python 3, BlueZ, BlueALSA,
+  FFmpeg, `arecord`, `aplay`, and a compatible Bluetooth headset.
+- Docker reaches `MAIX_IP` over the LAN. The camera sends microphone RTP to the
+  PC's LAN address supplied as `deploy_maix.ps1 -PcIp`.
 
-Use the [README native startup instructions](../README.md#run-the-configured-stack)
-for the working route. Python, FFmpeg on `PATH`, and `mediamtx.exe` in the project
-root are required for that alternative. The current hidden process has its PID
-and stdout/stderr in `.runtime/operator-native.*`. Do not start Docker's operator
-while the native stack owns the ports.
+Copy `.env.example` to `.env` on a new installation and edit `MAIX_IP`. Keep
+TCP/video selected. Compose sets independent microphone input to UDP 8004.
+Old `.env` values for `HEADSET_RTP_PORT`, `RETURN_AUDIO_PORT` and `WEBRTC_HOSTS`
+are no longer consumed. `RECORDING_MODE` defaults to `multistream` (video plus mixed/worker/operator audio);
+select `legacy` explicitly for video-only recordings.
 
-Daily native startup is `.\start_operator.ps1`; it reads the saved camera,
-transport and mode settings, reuses a matching running stack, and verifies HTTP
-200 from Windows. `-Build` rebuilds the frontend. Stop recording first, then use
-`.\stop_operator.ps1` before testing Docker. The Docker helper now rejects a
-running native operator and checks Windows HTTP access before printing success;
-if that check fails, switch with `.\start_operator.ps1`.
+The scripts create `.talkback_token` only if missing and validate its 32-character
+hexadecimal format. Preserve it across updates and deploy the same file to the
+camera. It is mounted read-only, excluded from Git and never baked into an image.
 
-Open **http://127.0.0.1:8000/operator_test.html** and sign in with **admin / admin**.
-The page is served by the PC; MaixCAM does not need an additional program for it
-to open. Camera services are required for video and talkback. The native
-workaround passed Windows HTTP 200, camera TCP packet checks, H.264 publication,
-and talkback API availability. Browser playback and audible talkback were not
-physically retested after switching. See the [session log](sessions/2026-10-10-rtsp-latency.md).
-
-The Docker instructions below remain available for retesting after native
-services are stopped. Preserve `RTSP_TRANSPORT=tcp` and `STREAM_MODE=video`.
-Earbuds → MaixCAM → PC audio remains unimplemented end to end; the historical
-microphone deployment and automated checks below do not establish feature completion.
-
-## 1. Choose the network mode
-
-Use `compose.yaml` together with `compose.host.yaml` for this UDP prototype. On Linux, host networking avoids Docker bridge translation of RTSP's negotiated UDP ports. Linux host mode is provided but has not been physically validated in this project.
-
-On Windows, install Docker Desktop **4.34 or newer**, use Linux containers, and enable **Settings → Resources → Network → Enable host networking**, then apply/restart Docker Desktop. Docker documents that Desktop host networking operates at layer 4 and differs from Linux host networking. See [Docker's host networking guide](https://docs.docker.com/engine/network/drivers/host/).
-
-**Earlier verification:** Docker Desktop host mode passed camera media reception, Chromium UDP playback, and silent WebRTC talkback checks using direct microphone RTP. These precede the current Windows localhost failure above. The earlier Desktop bridge configuration failed actual RTP delivery. Host mode alone did not fix incoming RTSP microphone publishing: Desktop rewrites UDP source ports, so the camera microphone was configured to send direct RTP to UDP 8004. Chromium also needs microphone permission to advertise usable IP candidates rather than unresolved mDNS names. Always verify actual media in step 6; a login page or successful RTSP connection alone is insufficient.
-
-Use a current Docker Compose release supporting the override's `!reset` tag; Compose 2.24.4 or later is a conservative minimum for this guide. See [Compose merge behavior](https://docs.docker.com/reference/compose-file/merge/).
+## Camera installation
 
 ```powershell
-docker version
-docker compose version
+.\deploy_maix.ps1 -MaixHost 10.172.16.1 -PcIp 192.168.1.4 -HeadsetMac 'AA:BB:CC:DD:EE:FF' -HostKey 'SHA256:YOUR_VERIFIED_FINGERPRINT' -Reboot
 ```
 
-The commands below use PowerShell unless marked Bash. Run Docker commands from the repository root.
+Replace the addresses and fingerprint. Enter the password at the private prompt,
+or supply `-KeyPath` for a PuTTY private key. Password authentication uses a local
+temporary `-pwfile`, removed in `finally`; the password is not printed or passed
+as a command-line value.
 
-## 2. Identify the camera and PC addresses
+The script stages files in a private camera directory, checks Python/shell syntax,
+and backs up existing files under `/root/workercam-backup-<id>` before installing.
+Backups include `/etc/rc.local`, the camera launcher app and metadata, token and
+audio settings. Save the printed backup path for rollback.
 
-On the current hardware:
+It installs the camera app at `/maixapp/apps/maix_rtsp`, sets it as the launcher's
+startup app, and replaces `/etc/rc.local` with the project background template.
+Use a device prepared for WorkerCam. `/root/workercam.env` holds `PC_IP`,
+`HEADSET_MAC` and `AUDIO_PROFILE`; the shared template reads them at boot.
+Uploads do not start duplicate capture processes. `-Reboot` activates the files;
+without it, activation waits for the operator to reboot the camera.
 
-| Address | Purpose |
+Camera deployment defaults to `-AudioProfile sco`, the CVSD/120-byte-MTU duplex
+setup. Explicit `-AudioProfile a2dp` selects the half-duplex fallback. Follow
+the [headset acceptance procedure](sco-duplex.md) for the target unit.
+The reboot check verifies the RTSP port, and PC startup checks received video
+packets. Neither check certifies audible headset performance.
+
+## PC deployment
+
+```powershell
+.\deploy_pc.ps1 -Build
+```
+
+This validates Compose and transport settings, rejects a conflicting native
+listener, checks recording status in the existing project container, builds when
+requested, starts the service and verifies Windows HTTP access. Docker packages
+the compiled interface, Python, FFmpeg and MediaMTX. No local language runtimes
+or media binaries are required.
+
+Routine startup uses `run_all.ps1`, which also opens the browser. Its optional
+`-DeployMaix` path installs and reboots the camera first. Finish recordings before
+either PC or camera updates. Only the Compose service `server` is managed;
+other Docker projects and databases are not modified.
+
+## Network and firewall
+
+| Connection | Required access |
 | --- | --- |
-| `192.168.1.7` | MaixCAM Wi-Fi; video and camera control |
-| `192.168.1.4` | PC Wi-Fi; camera microphone publishes here |
-| `10.172.16.1` | MaixCAM USB NCM; diagnostic fallback |
-| `10.172.16.100` | PC USB NCM adapter |
-| `10.172.17.1` | Alternate MaixCAM USB RNDIS address |
-| `10.172.17.100` | PC USB RNDIS adapter |
+| Browser → operator | PC loopback TCP 8000. |
+| Browser → WebRTC signaling | PC loopback TCP 8889. |
+| Browser ↔ WebRTC media | PC loopback UDP 8189. |
+| Local diagnostics → relay | PC loopback TCP 8554. |
+| PC → camera video | Camera TCP 8554, H.264 over RTSP/TCP. |
+| Camera → PC microphone | PC UDP 8004/8005, published through Docker. |
+| PC → camera talkback | Camera UDP 9002. |
+| PC → camera status/clock | Camera TCP 8765. |
+| Installer → camera SSH | Camera TCP 22. |
 
-These Wi-Fi addresses can change. Check the PC with `ipconfig` on Windows or `ip -4 addr` on Linux. The camera microphone's target must be the **Docker host's LAN address**, not `127.0.0.1`, a container address, or `host.docker.internal`.
-
-Connect MaixCAM and the PC to the same LAN. Connect USB as well if you want diagnostic access when Wi-Fi fails. Power on the fixed earbuds and disconnect them from other devices.
-
-The fixed earbuds currently have Bluetooth address `6C:16:29:7B:00:D4`. To use another pair deliberately, change `--fixed-mac` in `maix/background_services.rc.local` before deploying it.
-
-## 3. Prepare the project configuration
-
-```powershell
-Set-Location C:\Users\trand\orca\maixcam-mic
-```
-
-Create or edit a root `.env` file with these entries. Preserve other entries if the file already exists:
-
-```dotenv
-MAIX_IP=192.168.1.7
-MAIX_USB_IP=10.172.16.1
-RTSP_TRANSPORT=tcp
-STREAM_MODE=video
-HEADSET_RTP_PORT=8004
-WEBRTC_HOSTS=127.0.0.1,192.168.1.4
-```
-
-Compose reads this file automatically. `MAIX_IP` selects the media camera; `MAIX_USB_IP` is diagnostic-only and does not automatically reroute media.
-
-TCP/video is the accepted configuration. `HEADSET_RTP_PORT` is unused by the
-video-only publisher; recordings contain no microphone audio. Native startup
-does not read this file automatically and needs explicit transport/mode flags.
-
-`HEADSET_RTP_PORT` must match the camera's `--rtp-port` (an even port from 1024 through 65534, with the next port reserved for RTCP). `WEBRTC_HOSTS` includes the PC's LAN address; update it if the PC address changes. The host override uses IPv4 relay listeners and also gathers interface candidates for WebRTC.
-
-Make the persistent recording directory:
+MediaMTX advertises `127.0.0.1` for the local browser and does not advertise
+container-only interfaces. Camera microphone input is the host mapping that
+accepts LAN traffic. On Windows Private networks, an administrator can allow the
+known camera address (replace the example):
 
 ```powershell
-New-Item -ItemType Directory -Force recordings | Out-Null
+New-NetFirewallRule -DisplayName 'WorkerCam microphone' -Direction Inbound -Action Allow -Protocol UDP -LocalPort 8004,8005 -RemoteAddress 192.168.1.7 -Profile Private
 ```
 
-On Linux, use `mkdir -p recordings` instead.
+No router forwarding is needed. Do not expose the prototype API to the internet.
+Remote browsers require separate authentication and HTTPS.
 
-The root `.talkback_token` must be an existing **file containing 32 hexadecimal characters**. Keep an existing token: it must match `/root/.talkback_token` on MaixCAM. The upload script copies it for you. Docker mounts this file read-only; it is excluded from the image.
+Earlier bridge failures involved RTSP's negotiated UDP path. This route uses TCP
+for RTSP and fixed UDP microphone ports. It still needs physical verification on
+the customer's PC; configuration changes do not establish a latency improvement.
 
-Only if the file is missing, generate it without printing its value:
+## Diagnostics
 
 ```powershell
-if (-not (Test-Path -LiteralPath .talkback_token)) {
-  docker run --rm -v "${PWD}:/work" -w /work python:3.11-slim-bookworm python -c "import pathlib,secrets; p=pathlib.Path('.talkback_token'); p.open('x').write(secrets.token_hex(16))"
-}
+docker compose config --quiet
+docker compose ps
+docker compose logs --tail 80 server
+docker compose exec server python -m pc.camera_diagnostics --maix-ip 192.168.1.7
+docker compose exec server python -m pc.check_camera_udp --maix-ip 192.168.1.7 --transport tcp
+docker compose exec server cat .runtime/headset-return.ffmpeg.log
 ```
 
-Bash equivalent for Linux:
+`healthy` means the recording-status API responds. Confirm live video, enable
+microphone return, speak in each direction and save/play a short recording.
+An unavailable camera fails the startup TCP probe and the container retries;
+check camera power and `MAIX_IP`. If Docker is healthy but Windows HTTP fails,
+inspect Docker Desktop forwarding and port ownership.
 
-```bash
-if [ ! -f .talkback_token ]; then
-  docker run --rm --user "$(id -u):$(id -g)" -v "$(pwd):/work" -w /work python:3.11-slim-bookworm python -c "import pathlib,secrets; p=pathlib.Path('.talkback_token'); p.open('x').write(secrets.token_hex(16))"
-fi
-chmod 600 .talkback_token
-```
+Container logs rotate at 10 MB with three files. Recordings persist through their
+host bind mount. Decoder logs inside `.runtime` in the container are temporary;
+collect them before replacing a container if needed for troubleshooting.
 
-Do not regenerate the token on each startup. If you replace it, redeploy it to the camera and restart both sides.
-
-## 4. Set up MaixCAM once, or after changing camera programs
-
-For the currently working video/talkback device, skip camera redeployment.
-Opening the operator page requires only the PC server. The microphone setup
-below documents earlier experiments and does not complete the pending earbuds
-audio feature.
-
-If this device is already running the deployed Docker prototype with `--rtp-port 8004` and its PC target is still correct, skip to step 5. A camera previously configured for RTSP `/headsetmic` must be updated for this host override. These steps require the existing MaixPy camera runtime, BlueZ, BlueALSA, FFmpeg, and ALSA tools on the device; the PC container does not install camera firmware or Bluetooth dependencies.
-
-### Upload from Windows over USB
-
-Install PuTTY so `plink` and `pscp` are available. Check the PC IP target in `maix/background_services.rc.local`:
-
-```sh
-nohup python3 /root/headset_mic_stream.py --target 192.168.1.4 --rtp-port 8004 </dev/null >>/root/headset-mic-stream.log 2>&1 &
-```
-
-Replace `192.168.1.4` with the Docker host's actual LAN address if necessary.
-
-The repository startup template defaults to RTSP for compatibility with the native stack. Add `--rtp-port 8004` to that microphone command before uploading for this Docker guide. The deployed camera's `/etc/rc.local` already includes it. Omitting this option on both sides retains the original RTSP microphone mode.
-
-The following fingerprint and root password belong to the currently deployed camera. Verify a different camera's SSH fingerprint before using it. A firmware reflash may change the key.
+## Stop, backup and rollback
 
 ```powershell
-$cameraHost = '10.172.16.1'
-$cameraKey = 'SHA256:MMjQMht0IcoEBBkw5OVPuwa2wrbSHpiEYHn27tdGcmY'
-./upload_maix.ps1 -MaixHost $cameraHost -Password root -HostKey $cameraKey
+.\stop_docker_pc.ps1
 ```
 
-If PowerShell blocks the script, run `Set-ExecutionPolicy -Scope Process Bypass` in this terminal and retry. The script backs up existing upload targets in `/root/backup-<timestamp>`, copies all camera programs plus the shared TB2 protocol and token, and normalizes the startup script's line endings. Uploading alone does not activate them.
+The helper checks status inside the container, refuses recording/finalization,
+then runs `docker compose stop server`. If status cannot be read while running,
+it refuses to guess. Inspect logs and recordings before any manual forced stop.
+Docker's two-minute grace period is a fallback, not a guarantee that a long
+multistream mux finishes under forced shutdown. Finish recording in the UI first.
 
-### Back up startup configuration and activate
+Back up `recordings/`, `.env` and `.talkback_token` while recording is stopped.
+For PC rollback, restore a known project version and run `deploy_pc.ps1 -Build`
+with the preserved settings and token.
 
-Back up the launcher configuration separately before replacing it:
+For camera rollback, connect over SSH and inspect the saved backup directory.
+Restore its `/root` modules/config/token, `rc.local` to `/etc/rc.local`,
+`maix_rtsp` to `/maixapp/apps/maix_rtsp`, and launcher metadata to its original
+paths. Restore only files present in that backup, then reboot once. If the token
+changes, restore the matching PC token. Avoid duplicate audio processes.
 
-```powershell
-plink -batch -hostkey $cameraKey -pw root "root@$cameraHost" 'backup=/root/startup-backup-$(date +%Y%m%d-%H%M%S); mkdir -p "$backup" && chmod 700 "$backup" && cp -p /etc/rc.local "$backup/rc.local" && { if test -d /maixapp/apps/maix_rtsp; then cp -rp /maixapp/apps/maix_rtsp "$backup/"; fi; } && { if test -f /maixapp/auto_start.txt; then cp -p /maixapp/auto_start.txt "$backup/"; fi; } && { if test -f /maixapp/apps/app.info; then cp -p /maixapp/apps/app.info "$backup/"; fi; } && echo "$backup"'
-```
+## Linux Docker hosts
 
-Ensure this command succeeds and save the printed backup path. Install the touchscreen-free camera app:
+Use the same `.env`, matching token, `recordings/` directory and `compose.yaml`.
+The Windows scripts are the customer entry points; Linux installers can use
+`docker compose up --build -d --wait` and `docker compose stop server` after
+checking recording status. Use a browser on the Docker host's local desktop.
 
-```powershell
-plink -batch -hostkey $cameraKey -pw root "root@$cameraHost" 'mkdir -p /maixapp/apps/maix_rtsp && cp /root/rtsp_av.py /maixapp/apps/maix_rtsp/main.py && cp /root/rtsp_app.yaml /maixapp/apps/maix_rtsp/app.yaml && python3 /maixapp/apps/gen_app_info.py /maixapp/apps && printf maix_rtsp > /maixapp/auto_start.txt'
-```
-
-Install the background audio startup file and reboot:
-
-```powershell
-plink -batch -hostkey $cameraKey -pw root "root@$cameraHost" 'cp /root/background_services.rc.local /etc/rc.local && sh -n /etc/rc.local && reboot'
-```
-
-Wait for SSH to return. The launcher starts the camera; `/etc/rc.local` starts Bluetooth, the microphone publisher, and talkback. Do not launch duplicate copies manually. On Linux, use your trusted `ssh`/`scp` setup to deploy the same files listed in `upload_maix.ps1` and run the same remote commands.
-
-## 5. Build and start Docker
-
-If a native `python app.py` session is already running, stop it with **Ctrl+C in its terminal** first. A previously hidden launch must be stopped using its verified project PID and command line. Do not kill every Python or FFmpeg process. Native and Docker stacks compete for the same ports.
-
-The relay configuration requests 4 MiB UDP buffers. At startup, `app.py` caps MediaMTX's request to Linux's current `net.core.rmem_max`. If that limit cannot be read, it uses the OS default (`udpReadBufferSize: 0`, as documented in the [MediaMTX configuration](https://github.com/bluenviron/mediamtx/blob/v1.21.1/mediamtx.yml)). This avoids the fatal `unable to set UDP read buffer size` error after Docker VM resets. Native Windows keeps its existing 4 MiB request. On Windows, the helper starts Docker if needed, validates Compose, and builds/starts the stack:
-
-```powershell
-./start_docker.ps1 -Build
-```
-
-The helper requires Desktop host networking to be enabled first. Enlarging Linux UDP limits is optional tuning. On Docker Desktop, when the VM exposes these sysctls, use:
-
-```powershell
-wsl -d docker-desktop -u root -- sysctl -w net.core.rmem_max=4194304 net.core.wmem_max=4194304
-```
-
-On a Linux Docker host, optionally enlarge the limits and retain them across reboots:
-
-```bash
-printf 'net.core.rmem_max=4194304\nnet.core.wmem_max=4194304\n' | sudo tee /etc/sysctl.d/90-workercam-udp.conf
-sudo sysctl -p /etc/sysctl.d/90-workercam-udp.conf
-```
-
-Manual Compose startup (no kernel tuning required):
-
-```powershell
-docker compose -f compose.yaml -f compose.host.yaml config --quiet
-docker compose -f compose.yaml -f compose.host.yaml up --build -d
-docker compose -f compose.yaml -f compose.host.yaml ps
-docker compose -f compose.yaml -f compose.host.yaml logs --tail 100 server
-```
-
-Use **both `-f` arguments for every operation** in this guide. The image build compiles the React UI, installs FFmpeg, and copies the pinned MediaMTX binary. The container supervises all PC services; camera programs remain outside Docker.
-
-Expected current-mode logs include MediaMTX listeners, `Operator UI: http://127.0.0.1:8000/operator_test.html`, and `/maix01` online with one H.264 track. TCP video-only does not consume the microphone input. In an explicitly selected combined/direct-RTP test, FFmpeg reads an internally generated SDP file describing PCMU/8 kHz mono on UDP 8004. The UI can load before media is ready.
-
-Host mode has no published-port listing in `docker compose ps`; that is expected. The UI and WHEP HTTP listeners are bound to loopback by the override, so open the browser on the Docker host.
-
-## 6. Verify the complete media path
-
-Check reachability from inside the container using explicit addresses. The diagnostic CLI does not inherit the supervisor's command-line `--maix-ip`, so pass your configured values:
-
-```powershell
-docker compose -f compose.yaml -f compose.host.yaml exec server python -m pc.camera_diagnostics --maix-ip 192.168.1.7 --maix-usb-ip 10.172.16.1
-docker compose -f compose.yaml -f compose.host.yaml exec server python -m pc.check_camera_udp --maix-ip 192.168.1.7
-```
-
-The first command tests TCP services. It checks USB only if all tested Wi-Fi services fail. The second must report `"verified": true`, `"transport": "udp"`, and a positive video packet count. It briefly opens an additional camera reader; do not run it continuously while assessing loss.
-
-If the UDP probe fails on Windows Desktop while SSH works from Windows, inspect Docker networking and firewall rules. USB adapter reachability from the Windows host also does not guarantee reachability from Docker Desktop. The earlier bridge failure is recorded in [the validation notes](udp-media.md).
-
-Open **http://127.0.0.1:8000/operator_test.html** and sign in with **admin / admin**:
-
-1. Open **Live Workers** and select the physical **Worker #07**. Worker #12 is a demo.
-2. On Docker Desktop, allow **Microphone** for this localhost site in browser site settings and reload. Alternatively, press the talk button once, accept the microphone permission prompt, release it, and let playback reconnect. Without this permission, Chromium can hide its IP behind a `.local` mDNS candidate the Docker VM cannot resolve.
-3. Confirm actual camera video and the WebRTC/UDP transport status.
-4. Current TCP video-only mode has no monitored microphone audio. Earbuds microphone implementation and validation remain future work.
-5. Hold the talk button, speak, and release it. Confirm sound at the camera/earbuds separately from API availability.
-6. Start a short recording, stop it, and open it under **Recordings**. Stopping finalizes the MP4.
-7. Under **Settings**, use **Diagnose camera** if the feed is unavailable.
-
-Use localhost for browser microphone access. Viewing the UI through a remote HTTP LAN address requires further binding, ICE address, and secure-context configuration; this guide covers a browser on the Docker host.
-
-## 7. Daily startup, updates, and shutdown
-
-After initial setup, power on MaixCAM and the earbuds, then run:
-
-On Windows, use `./start_docker.ps1` for Docker startup checks. On Linux, use the following directly:
-
-```powershell
-docker compose -f compose.yaml -f compose.host.yaml up -d
-docker compose -f compose.yaml -f compose.host.yaml logs -f server
-```
-
-Ctrl+C exits log following without stopping the container. It has `restart: unless-stopped`; start Docker after a PC reboot. The supervisor retries a lost publisher, and the camera retries headset connection. An interrupted recording requires a new recording; seamless recovery within one MP4 is not implemented.
-
-After changing frontend code, PC code, or `mediamtx.yml`, rebuild:
-
-```powershell
-docker compose -f compose.yaml -f compose.host.yaml up --build -d
-```
-
-After changing `.env`, use `up -d` to apply the configuration; `restart` alone does not apply changed Compose settings. Camera code changes require step 4 separately. See [Docker's restart documentation](https://docs.docker.com/reference/cli/docker/compose/restart/).
-
-Stop recording in the UI before shutting down:
-
-```powershell
-docker compose -f compose.yaml -f compose.host.yaml down
-```
-
-MP4s and metadata remain in the host `recordings/` directory. The token also remains on the host. Containers can be recreated without losing these files.
-
-## 8. Ports and troubleshooting
-
-| Location | Port | Purpose |
-| --- | --- | --- |
-| PC loopback | TCP 8000 | UI, operator API, saved recordings |
-| PC loopback | TCP 8889 | WebRTC WHEP/WHIP signaling |
-| PC | UDP 8189 | Browser WebRTC media |
-| PC | TCP 8554 | MediaMTX RTSP control; camera mic connects here |
-| PC | UDP 8002 / 8003 | MediaMTX RTP / RTCP |
-| PC | UDP 8004 / 8005 | Direct headset G.711 RTP / RTCP |
-| Camera | TCP 8554 | Camera RTSP control |
-| Camera | TCP 8765 | Authenticated Bluetooth control |
-| Camera | UDP 9002 | Authenticated talkback PCM |
-| Camera | TCP 22 | SSH diagnosis/deployment |
-
-Camera RTSP UDP media also uses ports negotiated during RTSP setup, including PC FFmpeg receive ports in its default 5000–65000 range. Allow the relevant container/Docker processes and camera traffic on the trusted LAN; allowing TCP 8554 alone does not allow media. Host networking avoids needing to publish every negotiated port. Keep LAN firewall rules scoped to the intended host/camera.
-
-| Symptom | Checks |
-| --- | --- |
-| Container will not start | Check Docker is running, token is a file, recording directory exists, and native services have released the ports. Read Compose logs. |
-| Windows cannot open the page, but container HTTP works | This failure persisted after Desktop restart and operator recreation on 2026-10-10. Use the README native TCP/video startup route after stopping the operator container; preserve unrelated containers. The Docker forwarding cause remains unresolved. |
-| Page returns 404 | Use `/operator_test.html`, not `/operaator_test.html`. MaixCAM does not serve this PC page. |
-| MediaMTX cannot set UDP buffer size | Rebuild the image with `docker compose -f compose.yaml -f compose.host.yaml build server`, then recreate the server. Current `app.py` adapts the request to the Linux limit; an old container still uses the old startup code. |
-| UI loads, camera stays offline | Run the container UDP probe; check MaixCAM launcher, camera Wi-Fi IP, host mode, and firewall. |
-| Headset input absent | In this guide `/headsetmic` is unused. Check camera `--target`, `--rtp-port 8004`, matching `HEADSET_RTP_PORT`, and UDP 8004/8005. Read `/root/headset-mic-stream.log`. |
-| WebRTC ICE connection times out | Allow browser microphone permission, reload, check `WEBRTC_HOSTS`, and confirm Desktop host networking is enabled. |
-| Video corruption or freezes | Look for `RTP: missed` / `RTP packets lost`. FFmpeg requests 4 MiB receive buffers; MediaMTX adapts to Linux's ceiling. Relay payloads are 1200 bytes; Wi-Fi loss can still damage upstream H.264 frames. |
-| Headset audio missing | Click Enable audio, check fixed-earbud status, disconnect earbuds from other devices, and read `/root/bluetooth-audio.log`. |
-| Talkback unavailable | Check matching tokens without printing them, microphone permission, UDP 9002, and `/root/talkback-receiver.log`. Current PC code calibrates timestamps through authenticated `/bluetooth/clock`; deploy current `bluetooth_control.py` on the camera. Older camera code requires PC/camera clocks within two seconds. |
-| Wi-Fi unreachable | Use USB SSH; check `ip -4 addr`, `netstat -lnt`, and camera logs. USB diagnostics do not switch the media path. |
-| Recording does not play | Stop recording first. Check host `recordings/`, free disk space, and recording API status. |
-
-Read camera logs over USB, using the variables from step 4:
-
-```powershell
-plink -batch -hostkey $cameraKey -pw root "root@$cameraHost" 'ip -4 addr; netstat -lnt; tail -n 40 /root/bluetooth-audio.log; tail -n 40 /root/headset-mic-stream.log; tail -n 40 /root/talkback-receiver.log; date -u'
-```
-
-The camera sends 640 × 480 hardware H.264 using the RTSP encoder defaults (30 fps / 3 Mbps). Current video-only monitoring and saved MP4s contain H.264 without microphone audio. Combined-mode code supports Opus monitoring and AAC recording, but earbuds → MaixCAM → PC feature completion remains pending. The login is a prototype UI gate, not API authorization. Physical latency and audible talkback quality remain separate hardware checks. See [protocols and measured validation](udp-media.md) for details.
+Docker's [Compose service reference](https://docs.docker.com/reference/compose-file/services/)
+documents the health checks, published ports and stop grace period used here.

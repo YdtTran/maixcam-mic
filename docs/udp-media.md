@@ -1,5 +1,7 @@
 # UDP media prototype
 
+> Historical implementation/deployment record. For current Docker startup, use the [README](../README.md) and [Docker guide](docker-run-guide.md). Removed script and Compose override names below describe the trials at that time.
+
 The validation below records the original UDP prototype. Configurable RTSP
 TCP/UDP support was added afterward; UDP remains the default and MediaMTX now
 accepts both. See [transport configuration](rtsp-transport.md) and

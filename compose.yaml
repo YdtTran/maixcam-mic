@@ -6,23 +6,34 @@ services:
     image: maix-cam-server:local
     restart: unless-stopped
     init: true
+    stop_grace_period: 2m
     environment:
       MAIX_USB_IP: ${MAIX_USB_IP:-10.172.16.1}
       MTX_RTSPTRANSPORTS: udp,tcp
-      RTSP_TRANSPORT: ${RTSP_TRANSPORT:-udp}
-      STREAM_MODE: ${STREAM_MODE:-combined}
-      RETURN_AUDIO_PORT: ${RETURN_AUDIO_PORT:-}
+      RTSP_TRANSPORT: ${RTSP_TRANSPORT:-tcp}
+      STREAM_MODE: ${STREAM_MODE:-video}
+      RETURN_AUDIO_PORT: '8004'
+      MTX_WEBRTCIPSFROMINTERFACES: 'false'
       MTX_WEBRTCADDITIONALHOSTS: 127.0.0.1
-    command: ["python", "-u", "app.py", "--bind-host", "0.0.0.0", "--maix-ip", "${MAIX_IP:-192.168.1.7}"]
+    command: ["python", "-u", "app.py", "--bind-host", "0.0.0.0", "--maix-ip", "${MAIX_IP:-192.168.1.7}", "--recording-mode", "${RECORDING_MODE:-multistream}"]
     ports:
-      - "8554:8554/tcp"
-      - "8002:8002/udp"
-      - "8003:8003/udp"
+      - "127.0.0.1:8554:8554/tcp"
       - "8004:8004/udp"
       - "8005:8005/udp"
       - "127.0.0.1:8000:8000/tcp"
       - "127.0.0.1:8889:8889/tcp"
       - "127.0.0.1:8189:8189/udp"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/recordings/status', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
     volumes:
       - type: bind
         source: ./.talkback_token

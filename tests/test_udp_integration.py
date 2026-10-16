@@ -43,7 +43,7 @@ class UdpIntegrationTests(unittest.TestCase):
             collector.start()
             relay = TalkbackRelay(token, udp.getsockname(), relay_http="http://127.0.0.1:18889",
                                   relay_rtsp="rtsp://127.0.0.1:18554", transport=transport)
-            manager = RecordingManager(directory, source="rtsp://127.0.0.1:18554/maix01", transport=transport)
+            manager = RecordingManager(directory, source="rtsp://127.0.0.1:18554/maix01", transport=transport, recording_mode="legacy")
             server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(manager, talkback=relay))
             server_thread = threading.Thread(target=server.serve_forever)
             server_thread.start()

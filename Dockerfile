@@ -19,5 +19,5 @@ COPY app.py mediamtx.yml ./
 COPY pc ./pc
 COPY --from=frontend /ui/pc/operator_test.html ./pc/operator_test.html
 
-EXPOSE 8000/tcp 8554/tcp 8889/tcp 8189/udp 8002/udp 8003/udp
+EXPOSE 8000/tcp 8554/tcp 8889/tcp 8189/udp 8004/udp 8005/udp
 CMD ["python", "-u", "app.py", "--bind-host", "0.0.0.0"]

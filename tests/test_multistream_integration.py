@@ -108,7 +108,7 @@ class MultistreamIntegrationTests(unittest.TestCase):
                                base + "/maix01"])
                 time.sleep(.7)
                 # Legacy fallback remains genuinely playable and video-only.
-                legacy = RecordingManager(directory, base + "/maix01", transport="tcp", mode="video")
+                legacy = RecordingManager(directory, base + "/maix01", transport="tcp", mode="video", recording_mode="legacy")
                 managers.append(legacy)
                 legacy.start()
                 time.sleep(2)

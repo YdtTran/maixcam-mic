@@ -7,6 +7,72 @@ from maix.bluetooth_audio import BluetoothAudioConnector, LEGACY_ROUTE_MARKER, R
 
 
 class BluetoothAudioConnectorTests(unittest.TestCase):
+    def test_prepare_sco_cli_does_not_start_services_and_propagates_failure(self):
+        arguments = ["bluetooth_audio.py", "--fixed-mac", "28:52:E0:16:73:CE",
+                     "--playback-profile", "sco", "--sco-mtu", "120", "--prepare-sco"]
+        with patch("sys.argv", arguments), patch("maix.bluetooth_audio.BluetoothAudioConnector") as factory, \
+             patch("maix.bluetooth_audio.serve") as serve, patch("maix.bluetooth_audio.threading.Thread") as thread:
+            connector = factory.return_value
+            connector.prepare_sco.return_value = False
+            with self.assertRaises(SystemExit) as failure:
+                main()
+            self.assertEqual(failure.exception.code, 1)
+            connector._route_playback.assert_not_called()
+            connector.prepare_sco.return_value = True
+            main()
+            connector._route_playback.assert_called_once()
+            serve.assert_not_called()
+            thread.assert_not_called()
+
+    def test_unverified_mtu_prevents_bluealsa_start(self):
+        commands = []
+        def run(command, timeout=20):
+            commands.append(command)
+            return 0, "SCO MTU: 255:4\nUP RUNNING"
+        connector = BluetoothAudioConnector("28:52:E0:16:73:CE", run=run,
+                                            playback_profile="sco", sco_mtu=120)
+        self.assertFalse(connector.attempt())
+        self.assertFalse(any(c[0] == "pidof" for c in commands))
+
+    def test_prepare_sco_powers_controller_before_mtu_and_before_bluealsa(self):
+        commands = []
+        powered, mtu = False, 120
+
+        def run(command, timeout=20):
+            nonlocal powered, mtu
+            commands.append(command)
+            if command == ["hciconfig", "hci0", "up"]:
+                powered, mtu = True, 255  # Controller initialization resets MTU.
+            elif "scomtu" in command:
+                mtu = 120
+            if command[:2] == ["hciconfig", "hci0"]:
+                return 0, f"SCO MTU: {mtu}:4\n\t{'UP RUNNING' if powered else 'DOWN'}\n"
+            return 0, "Paired: yes\nTrusted: yes\nConnected: yes"
+
+        with tempfile.TemporaryDirectory() as directory:
+            connector = BluetoothAudioConnector("28:52:E0:16:73:CE", run=run,
+                config_path=Path(directory) / "alsa", playback_profile="sco", sco_mtu=120)
+            self.assertTrue(connector.attempt())
+        self.assertIn(["hciconfig", "hci0", "up"], commands)
+        self.assertLess(commands.index(["hciconfig", "hci0", "up"]),
+                        commands.index(["hciconfig", "hci0", "scomtu", "120:4"]))
+        self.assertLess(commands.index(["hciconfig", "hci0", "scomtu", "120:4"]),
+                        commands.index(["pidof", "bluealsa"]))
+        self.assertEqual(mtu, 120)
+
+    def test_prepare_sco_failed_power_up_prevents_audio_start(self):
+        commands = []
+        def run(command, timeout=20):
+            commands.append(command)
+            if command[-1] == "up":
+                return 1, "not ready"
+            return 0, "SCO MTU: 255:4\n\tDOWN\n"
+        with tempfile.TemporaryDirectory() as directory:
+            connector = BluetoothAudioConnector("28:52:E0:16:73:CE", run=run,
+                config_path=Path(directory) / "alsa", playback_profile="sco", sco_mtu=120)
+            self.assertFalse(connector.attempt())
+        self.assertFalse(any(c[0] in ("pidof", "bluetoothctl") or "scomtu" in c for c in commands))
+
     def test_failed_sco_reset_obeys_cooldown_and_blocks_reconnect_in_that_attempt(self):
         commands = []
         now = [30.0]
@@ -40,7 +106,7 @@ class BluetoothAudioConnectorTests(unittest.TestCase):
                     mtu[0] = 255
                 elif "scomtu" in command:
                     mtu[0] = 120
-                return 0, f"SCO MTU: {mtu[0]}:4"
+                return 0, f"SCO MTU: {mtu[0]}:4\nUP RUNNING"
             return 0, "Paired: yes\nTrusted: yes\nConnected: yes"
         with tempfile.TemporaryDirectory() as directory:
             connector = BluetoothAudioConnector("28:52:E0:16:73:CE", run=run,
@@ -87,7 +153,7 @@ class BluetoothAudioConnectorTests(unittest.TestCase):
             if command[:2] == ["hciconfig", "hci0"]:
                 if len(command) == 4:
                     current[0] = int(command[3].split(":")[0])
-                return 0, f"SCO MTU: {current[0]}:4"
+                return 0, f"SCO MTU: {current[0]}:4\nUP RUNNING"
             return 0, "Paired: yes\nTrusted: yes\nConnected: yes"
         with tempfile.TemporaryDirectory() as directory:
             connector = BluetoothAudioConnector("28:52:E0:16:73:CE", run=run,
@@ -100,7 +166,7 @@ class BluetoothAudioConnectorTests(unittest.TestCase):
     def test_failed_sco_mtu_override_does_not_change_route(self):
         def run(command, timeout=20):
             if command[0] == "hciconfig":
-                return (0, "SCO MTU: 255:4") if len(command) == 2 else (1, "denied")
+                return (0, "SCO MTU: 255:4\nUP RUNNING") if len(command) == 2 else (1, "denied")
             return 0, ""
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "alsa"

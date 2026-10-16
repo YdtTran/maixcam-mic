@@ -1,218 +1,288 @@
-# WorkerCam Admin / MaixCAM RTSP operator
+# WorkerCam Admin
 
-This project relays MaixCAM video, PC talkback, and independent earbuds microphone return to a local web operator page. Physical return and experimental SCO full duplex have been confirmed audibly; return quality still needs improvement. The PC side runs MediaMTX, FFmpeg, recording, and the operator server, either natively on Windows or in a Linux container. MaixCAM keeps its camera and Bluetooth programs on the physical device.
+Watch a worker's MaixCAM camera, listen through their Bluetooth headset microphone,
+speak to them, and save recordings from a browser on your PC.
 
-The operator page is now a React/TypeScript WorkerCam Admin interface with Live Workers, Recordings, and Settings. Sign in with `admin` / `admin`. Worker #07 connects to the physical camera; Worker #12 is a local demo. Login and the generic worker database are frontend prototypes (sessionStorage and IndexedDB); server authentication and database APIs remain future backend work. See [frontend/README.md](frontend/README.md) for development, data boundaries, and API integration.
+The PC software runs together in **Docker**. You do not need to install Python,
+Node.js, FFmpeg or MediaMTX on the PC. The camera runs its own camera and Bluetooth
+programs; the deployment script installs these directly on MaixCAM.
 
-## Directory layout
+![WorkerCam dashboard showing the built-in demonstration worker](imgs/dashboard-demo.png)
 
-```text
-maix-cam-server/
-├── maix/                 MaixCAM programs
-│   ├── rtsp_av.py         Camera video RTSP publisher
-│   ├── bluetooth_audio.py
-│   ├── headset_mic_stream.py  headset mic publisher to laptop MediaMTX
-│   ├── talkback_receiver.py
-│   ├── rtsp_app.yaml       Maix app metadata for RTSP auto-start
-│   └── background_services.rc.local
-├── pc/                   Windows operator and relay scripts
-│   ├── operator_server.py
-│   ├── operator_test.html  Compiled WorkerCam Admin UI
-│   ├── run_publisher.ps1
-│   └── talkback.py
-├── recordings/           MP4 files and recording metadata
-├── frontend/             React/TypeScript UI source and browser tests
-├── tests/
-├── Dockerfile            PC server image
-├── compose.yaml          PC server deployment
-├── app.py                PC server supervisor
-├── upload_maix.ps1       PuTTY upload script for camera programs and token
-└── mediamtx.yml
+*The screenshots show the application's built-in demo worker and synthetic video.
+They illustrate the controls; they are not photographs from a connected camera.*
+
+## What you can do
+
+| Feature | How it works |
+| --- | --- |
+| Live view | Select **Worker #07** to watch the connected MaixCAM. |
+| Listen | Click **Enable audio** to hear the worker's headset microphone. |
+| Talk | Hold **Talk**, speak into your PC microphone, then release. |
+| Record | Click **Record**, then **Stop Recording** when finished. |
+| Review | Open **Recordings** to play or download an MP4. |
+| Try the interface | Select **Worker #12**, the demonstration worker. Its recordings are simulated. |
+
+**SCO duplex is the default headset pipeline**: listening
+continues while you hold **Talk**, allowing speech in both directions at once.
+SCO uses narrowband audio; microphone return quality still needs improvement.
+A2DP is available as a fallback with higher-quality playback and turn-taking:
+listening pauses while you talk.
+
+## Before the first setup
+
+You need a Windows PC, a prepared MaixCAM, a compatible Bluetooth headset,
+and a network that both devices can reach. Use PC headphones to avoid feedback.
+
+1. Install [Docker Desktop for Windows](https://docs.docker.com/desktop/setup/install/windows-install/).
+   Open it and wait until the engine is running. Use **Linux containers**.
+   Docker's optional host-networking setting is not required by this project.
+2. Extract the whole project into a folder you can keep, such as
+   `C:\WorkerCam`. Recordings will be stored in this folder.
+3. Ask your installer for the camera's network address and confirm the camera
+   is powered on. Reserve the PC and camera addresses in the router where possible.
+4. Open a PowerShell terminal in the project folder. The commands below run there.
+
+If this PC previously ran WorkerCam outside Docker, have the installer stop that
+old service first. The deployment script reports a port conflict if it finds one.
+
+## First-time setup
+
+### 1. Set the camera address
+
+Copy the example settings file **once**, then open it:
+
+```powershell
+Copy-Item .env.example .env
+notepad .env
 ```
 
-## Current configuration: TCP video-only
-
-The saved local `.env` selects the low-delay video configuration tested on
-2026-10-10:
+If `.env` already exists, open it without copying over it. Change `MAIX_IP` to
+the address supplied by your installer. For example:
 
 ```dotenv
+MAIX_IP=192.168.1.7
 RTSP_TRANSPORT=tcp
 STREAM_MODE=video
+RECORDING_MODE=multistream
 ```
 
-MaixCAM video reaches PC FFmpeg over RTSP/TCP, is copied as H.264 to MediaMTX
-over RTSP/TCP, and reaches the admin browser through WebRTC/WHEP over UDP.
-Headset microphone audio is excluded from `/maix01` and legacy recordings
-in this mode. Opt-in [PC multistream recording](docs/multistream-recording.md)
-adds mixed, worker and operator AAC tracks while retaining this video route:
-`./start_operator.ps1 -RecordingMode multistream`. Physical recording A/V
-synchronization and VLC acceptance are pending. Browser WHIP talkback and the sequenced-UDP camera relay remain
-available; they are independent of microphone monitoring.
+Save the file. Keep `RTSP_TRANSPORT=tcp` and `STREAM_MODE=video`; these select the
+camera route supported by the Docker deployment. The worker's microphone returns
+separately on UDP port 8004.
 
-The physical Edge stopwatch pilot measured 230 ms median and 240 ms p95 with
-seven clear samples. These are provisional results, not a latency guarantee.
-UDP video-only was also fast; the test does not establish TCP as the cause.
-The user reports acceptable video and PC talkback latency. Keep this
-configuration while implementing the earbuds microphone path separately.
-See [measurements and limitations](docs/rtsp-measurements.md).
+The default setup is Docker on the PC, TCP video, independent headset microphone
+return, and SCO duplex talkback. Recording defaults to `multistream`, saving
+video with mixed audio and separate worker/operator audio tracks. Select `legacy` for video-only recordings.
 
-## Run the configured stack
+### 2. Prepare the camera — installer step
 
-**Current Windows runtime (2026-10-10, approximately 19:19): native `app.py`.**
-Docker Desktop's operator page returned HTTP 200 inside the container but Windows
-could not reach localhost ports 8000 or 8889. Restarting Desktop and recreating
-the operator container did not resolve access. The operator container is now
-stopped, and the native Windows stack is running in TCP video-only mode.
-ThingsBoard and PostgreSQL were restored after the restart; PostgreSQL was healthy.
+**Skip this step if your installer has already configured this camera for this PC
+and supplied its matching `.talkback_token` file.**
 
-Open **http://127.0.0.1:8000/operator_test.html**, sign in with **admin / admin**,
-and select **Worker #07**. The filename is `operator_test.html`, not
-`operaator_test.html`. The operator page runs on the PC and can load while
-MaixCAM is offline. MaixCAM must provide its existing video and talkback services
-for those features; no additional camera program is needed just to open the page.
+For a new camera, the installer needs PuTTY (`plink` and `pscp` on PATH), the
+camera's SSH address and verified host-key fingerprint, the PC's LAN address,
+and the headset's Bluetooth address. MaixCAM must already have MaixPy, BlueZ,
+BlueALSA, FFmpeg and ALSA tools installed. This script does not flash firmware.
 
-For daily startup from the project root, with Python, FFmpeg on `PATH`, and
-`mediamtx.exe` beside `app.py`, run:
+Example — replace all addresses and the fingerprint with your installation's values:
 
 ```powershell
-.\start_operator.ps1
+.\deploy_maix.ps1 -MaixHost 10.172.16.1 -PcIp 192.168.1.4 -HeadsetMac 'AA:BB:CC:DD:EE:FF' -HostKey 'SHA256:YOUR_VERIFIED_FINGERPRINT' -AudioProfile sco -Reboot
 ```
 
-The helper reads `MAIX_IP`, `RTSP_TRANSPORT`, and `STREAM_MODE` from `.env`
-(defaults: `192.168.1.7`, TCP, video-only). It stops only the project's Docker
-operator when needed, reuses an already-running native operator with matching
-settings, otherwise starts it hidden, and verifies Windows HTTP access before
-reporting success. Docker is not required for native startup. It preserves other
-containers and does not start camera programs. Use `-Build` to rebuild the
-frontend after UI changes; Node/npm are required for that option.
+The password is requested privately. SSH key users can add `-KeyPath` with their
+PuTTY private-key file. `MaixHost` may be a USB address; `.env` should contain the
+camera address reachable from Docker, usually its Wi-Fi/LAN address.
 
-Stop a recording in the UI, then stop the native stack with:
+The script checks prerequisites, backs up camera files and startup settings,
+installs the programs and shared pairing token, configures the headset and PC
+destination, then reboots when `-Reboot` is supplied. Keep the printed backup
+path. Camera installation replaces its WorkerCam boot configuration; use a device
+prepared for this application. See [installer details and recovery](docs/docker-run-guide.md).
+
+Both `deploy_maix.ps1` and `run_all.ps1 -DeployMaix` default to SCO when
+`-AudioProfile` is omitted. The examples select it explicitly so the intended
+profile is clear when updating the PC destination or headset binding.
+SCO startup prepares the Bluetooth
+controller before opening audio, preventing the silent-link startup race.
+To use the A2DP fallback, replace it with `-AudioProfile a2dp` and redeploy with
+`-Reboot`. Finish recordings before switching profiles. See the
+[SCO duplex guide](docs/sco-duplex.md) for hardware checks and recovery.
+
+### 3. Build and open WorkerCam
+
+With Docker Desktop running and the camera ready:
 
 ```powershell
-.\stop_operator.ps1
+.\run_all.ps1 -Build
 ```
 
-The stop helper refuses to stop during an active recording. For a manual
-foreground launch after stopping any existing stack:
+The first build downloads required components and may take several minutes.
+After startup checks pass, your browser opens **http://127.0.0.1:8000**.
+
+Sign in with username **admin** and password **admin**. Select **Worker #07**,
+allow browser microphone access when asked, and click **Enable audio** to listen.
+Confirm the picture, listening and talkback before starting a work session.
+With SCO, confirm that the worker's microphone remains audible while **Talk**
+is held, and check both directions again after a camera reboot.
+
+If a pairing token was generated during PC setup, use `deploy_maix.ps1` to copy
+that same token to the camera. A different token on each side prevents talkback
+and headset status from working.
+
+## Daily use
+
+1. Power on the camera and headset. Open Docker Desktop on the PC.
+2. Run `.\run_all.ps1`. Camera installation is only needed when camera software,
+   its headset binding or the PC destination changes.
+3. Select **Worker #07** and check the live view and headset status.
+4. Click **Enable audio** to listen. Hold **Talk** to speak; release it
+   when finished. SCO keeps listening active while you speak. Allow the browser
+   permission prompt for the PC microphone.
+5. Click **Record** to start saving. Click **Stop Recording** and wait for
+   **Finalizing...** to finish before closing the system.
+
+To shut down the PC service after recordings finish:
 
 ```powershell
-docker compose -f compose.yaml -f compose.host.yaml stop server
-python app.py --maix-ip 192.168.1.7 --rtsp-transport tcp --stream-mode video
+.\stop_docker_pc.ps1
 ```
 
-Direct native Python does not automatically load Compose's `.env`; use the
-explicit flags above, or the startup helper. Stop a foreground native run with
-**Ctrl+C**. The current session
-was launched hidden, with its PID and logs in `.runtime/operator-native.pid`,
-`.runtime/operator-native.stdout.log`, and `.runtime/operator-native.stderr.log`.
-Do not start a second stack while it is running. Before returning to Docker,
-run `.\stop_operator.ps1` to stop the native supervisor and its MediaMTX/FFmpeg
-children, and confirm the ports are free. Do not stop unrelated Python or media processes.
+The script refuses to stop during an active recording or finalization. Recordings
+stay on disk. Switch off the camera separately when the work session is over.
 
-The workaround passed Windows HTTP 200, camera TCP packet reception, H.264
-publication on `/maix01`, and a talkback API availability check. Browser playback
-and audible talkback were not physically retested after this switch. See the
-[session evidence](docs/sessions/2026-10-10-rtsp-latency.md).
+## Recordings
 
-For Docker installation and the unresolved Windows access issue, use the
-[Docker run guide](docs/docker-run-guide.md). `./start_docker.ps1` (or `-Build`
-after code changes) remains the Docker helper, but is not the current working
-Windows startup route. It starts host mode with automatic Linux UDP buffer sizing,
-refuses to run alongside the native operator, and reports failure if Windows
-cannot reach the page. On that failure, run `.\start_operator.ps1`.
-Keep `.env` set to TCP/video when testing Docker again.
+![WorkerCam Recordings page with a saved demonstration recording](imgs/recordings-demo.png)
 
-Read [the protocol map and deployment history](docs/udp-media.md) before updating
-the physical device. Existing microphone scripts and earlier RTP checks do not
-establish a completed earbuds → MaixCAM → PC audio feature.
+*Demo recording shown. Worker #07 recordings come from the physical camera.*
 
-On Linux, use Docker host networking for RTSP/RTP UDP. Provision matching PC/camera talkback token files before starting. From the project root, run:
+Real recordings are stored in **`recordings/`** inside the project folder.
+You can also play or download them from the **Recordings** page.
+
+| Setting in `.env` | Saved MP4 |
+| --- | --- |
+| `RECORDING_MODE=multistream` — default | Camera video, a mixed audio track, and separate worker/operator audio tracks. |
+| `RECORDING_MODE=legacy` — fallback | Camera video only. |
+
+To change recording mode, finish the current recording, edit `.env`, then run
+`.\deploy_pc.ps1`. Operator audio exists while **Talk** is held; missing
+audio is filled with silence. SCO can record worker audio while **Talk** is held.
+If you select the A2DP fallback, listening pauses appear as silence in the worker
+track. A compatible player can select separate tracks.
+
+Multistream recording uses temporary disk space: about **691 MB per hour for
+audio**, plus video and the finished recording. Physical audio/video alignment,
+long-session drift and VLC track selection still need hardware acceptance tests.
+See the [recording guide](docs/multistream-recording.md) before relying on it for
+evidence or synchronized analysis.
+
+## The four scripts
+
+### When the network changes
+
+Changing Wi-Fi can give both devices new addresses. Update `MAIX_IP` in `.env`
+to the camera's new address. The installer must also update the camera's
+microphone destination by running `deploy_maix.ps1` with the PC's new LAN address
+as `-PcIp`. A USB `-MaixHost` can still be used for installation when Wi-Fi access
+is unavailable. Finish recordings before reinstalling/rebooting the camera.
+
+Reserve both addresses in the router to reduce repeated setup. The browser URL
+on the PC remains **http://127.0.0.1:8000**.
+
+### Script reference
+
+| File | Purpose |
+| --- | --- |
+| [`deploy_maix.ps1`](deploy_maix.ps1) | Install camera programs and startup settings, with backups. Use `-AudioProfile sco -Reboot` for the standard pipeline. |
+| [`deploy_pc.ps1`](deploy_pc.ps1) | Start or update the PC Docker service and check access. Add `-Build` after a software update. |
+| [`stop_docker_pc.ps1`](stop_docker_pc.ps1) | Safely stop this project's PC container, keeping recordings. |
+| [`run_all.ps1`](run_all.ps1) | Start the PC service and open the browser. Add `-DeployMaix` only when camera installation is needed. |
+
+### Update both PC and MaixCAM
+
+Finish any active recording and wait for finalization. In the existing `.env`,
+set `RECORDING_MODE=multistream`; keep `RTSP_TRANSPORT=tcp` and `STREAM_MODE=video`.
+This also upgrades installations that still explicitly select `legacy`.
+
+With Docker Desktop running, an installer can update both devices in one command:
 
 ```powershell
-docker compose -f compose.yaml -f compose.host.yaml up --build -d
+.\run_all.ps1 -DeployMaix -Build -MaixHost 10.172.16.1 -PcIp 192.168.1.4 -HeadsetMac 'AA:BB:CC:DD:EE:FF' -HostKey 'SHA256:YOUR_VERIFIED_FINGERPRINT' -AudioProfile sco
 ```
 
-Open `http://127.0.0.1:8000/operator_test.html`, sign in, and the physical MaixCAM feed connects automatically. RTSP signaling and current TCP-interleaved media use TCP 8554; UDP RTSP mode uses RTP/RTCP ports 8002/8003. WebRTC media uses UDP 8189; HTTP signaling uses 8889. The base Compose file maps these ports, but Windows Docker Desktop bridge/NAT failed actual RTP delivery in validation. Use the configured host-network override on this machine. TCP is explicitly selected, not an automatic fallback. The container reads `.talkback_token` without copying it into the image and saves MP4 files in the host's `recordings/` folder. Set `MAIX_IP` before `docker compose up` if the camera IP differs from `192.168.1.7`.
+This command checks that recording is idle, installs and reboots the camera
+with SCO duplex, then rebuilds the PC Docker service with multistream recording.
+Replace the addresses, headset binding and verified fingerprint with your own;
+keep the matching `.talkback_token`. After deployment, confirm the live picture,
+worker microphone return and Talk audio. With `RECORDING_MODE=multistream`,
+a saved MP4 contains video and mixed/worker/operator audio tracks.
+Normal daily startup uses `.\run_all.ps1` without those installation arguments.
+The camera retains its installed SCO profile across daily PC startup and reboot.
 
-The publisher takes video from `rtsp://<MaixIp>:8554/live` and publishes `/maix01` with the tracks selected by `STREAM_MODE`. Combined mode additionally reads microphone audio from `/headsetmic` or the configured direct RTP input. The operator page derives its WHEP address from the browser host. The container restarts automatically if it exits; the supervisor also restarts FFmpeg when the input stream drops. For Docker logs or shutdown, use `docker compose -f compose.yaml -f compose.host.yaml logs -f server` or `docker compose -f compose.yaml -f compose.host.yaml down`. Stop any earlier native stack before starting Docker because both use the same ports.
+## Help with common problems
 
-To run the PC side without Docker on Windows, keep `mediamtx.exe` beside `app.py`, install FFmpeg on `PATH`, and use the explicit native video-only command above. This is an alternative to Compose, not an additional service.
+| What you see | What to do |
+| --- | --- |
+| Docker engine is unavailable | Open Docker Desktop, wait for it to finish starting, and retry. |
+| PowerShell blocks scripts | For a project you trust, run `Set-ExecutionPolicy -Scope Process Bypass` in this terminal, then retry. |
+| Deployment times out or the page does not open | Check `.env`, camera power and Docker Desktop. Run `docker compose logs --tail 80 server` and share the output with your installer. |
+| Page opens but no camera picture | Select Worker #07, check camera power/network, then use **Settings → Diagnose camera**. |
+| No worker sound | Click **Enable audio**, check PC volume, and keep the earbuds powered on and out of their case. A Bluetooth “connected” status alone does not confirm its microphone is available. See the recovery steps below. |
+| Logs say `no stream is available on path 'headsetmic'` | The microphone return stream is unavailable. Follow the recovery steps below; check the camera's PC destination and inbound UDP 8004/8005 if it persists. |
+| Talkback is unavailable | Allow browser microphone access, check the headset and matching pairing token, then retry. |
+| Stop/update is refused | Stop recording in the interface and wait for finalization. If status cannot be read, inspect logs before forcing a container shutdown. |
+| You need a safe demonstration | In a running operator, select Worker #12. Its controls use synthetic video and demo data. |
 
-**Start Recording** saves MP4 files to `recordings/` under this project root, regardless of the terminal's current directory. Video is copied as H.264; when microphone monitoring is enabled, audio is converted from Opus to AAC. Current video-only recordings have no microphone audio. Stop recording to finalize the file before playback. The UI reports a relative storage path such as `recordings/20260917T054224Z_be738304.mp4`. To choose another directory, pass `--recordings <relative-path>`; relative paths are resolved from the project root.
+The Docker health check confirms that the operator API responds. It does not
+certify an audible headset connection or physical camera latency. Earlier Docker
+host-network trials had Windows access problems; this deployment uses published
+ports and requires the checks above on the customer's PC.
 
-The publisher and recorder remove empty H.264 NAL units emitted by this MaixCAM. The Docker image includes FFmpeg and the same `app.py` supervisor. Run the tests with `python -m unittest discover -s tests -v`.
+### Recover a missing microphone return stream
 
-## MaixCAM program
+1. Keep the earbuds on and nearby. Finish recordings and wait for finalization.
+2. Run `.\stop_docker_pc.ps1`. If it refuses to stop, resolve the recording or
+   finalization status before continuing; do not force shutdown.
+3. Run `.\run_all.ps1` to restart the PC service. Select **Worker #07**, click
+   **Enable audio**, and check worker speech and talkback again. This restart
+   restored a failed Docker UDP forwarding path in the observed outage.
+4. If the camera is unreachable over both USB and Wi-Fi, power-cycle it, wait
+   for video to return, then check both audio directions. If video works but
+   audio remains silent, ask the installer to check the headset's SCO profile
+   and capture process before resetting Bluetooth.
 
-The microphone behavior described below reflects the legacy A2DP/pause defaults
-and earlier deployment experiments. Independent microphone return is now
-implemented and deployed; the user confirmed audible experimental SCO duplex.
-Follow [the return guide](docs/headset-return-audio.md) for the direct RTP route
-and optional duplex settings. Keep current camera video services.
+These steps recovered the observed outage; the underlying Docker forwarding
+and Bluetooth profile failures remain under investigation. The default SCO
+setup includes the boot-order repair, but does not guarantee that every headset
+disconnect will recover automatically. See the
+[outage and recovery evidence](docs/sessions/2026-10-11-headsetmic-outage.md).
 
-`maix/rtsp_av.py` supplies 640 × 480 camera video to the PC publisher; it does not capture the built-in microphone. `maix/headset_mic_stream.py` captures the selected headset's microphone through BlueALSA and publishes it to `rtsp://192.168.1.4:8554/headsetmic`. If the laptop IP changes, update `--target` in `maix/background_services.rc.local` and reinstall that boot script. The headset microphone must support the 8 kHz hands-free profile and stereo playback. While Hold to Talk is pressed, MaixCAM pauses headset mic capture, plays PC audio through its stereo profile, and publishes silence on `/headsetmic` so the video stream stays live. Headset mic capture resumes on release.
+## For the installer and maintainer
 
-For two-way voice, copy `pc/talkback_protocol.py` beside `maix/talkback_receiver.py` on the camera, and copy `maix/bluetooth_audio.py`, `maix/bluetooth_control.py`, and `maix/headset_mic_stream.py` to MaixCAM. The startup template binds MaixCAM to its fixed earbuds using `--fixed-mac`. The Bluetooth address is saved in `/root/.bluetooth_device` and survives reboot. The audio service enables the hands-free audio-gateway profiles, trusts the earbuds, and retries connection every five seconds. No scan or device choice is required each session. The admin interface shows connection status and prevents switching to other earbuds. For initial pairing, put the bound earbuds in pairing mode. If they are unavailable, microphone streaming supplies silence while connection retries continue. The authenticated Bluetooth status service remains on TCP 8765. Do not start a second talkback receiver on UDP 9002. The boot script sets `HOME=/root` so ALSA can read `/root/.asoundrc`.
+- The supplied login is a **prototype interface login**, not production access
+  control. The operator page is bound to the local PC; use this build on a trusted
+  network. Remote browser access requires additional authentication and HTTPS.
+- Keep `.env`, `.talkback_token` and `recordings/` when updating the project.
+  The token is generated locally when missing and is excluded from Git and images.
+- Install updates with `.\deploy_pc.ps1 -Build` after completing recordings.
+  Camera updates use `deploy_maix.ps1`; ordinary PC updates do not require them.
+- The Docker image includes the compiled browser interface. Its source is in
+  `frontend/`; the generated HTML is built automatically and is not tracked.
+- [Docker installation, diagnostics and recovery](docs/docker-run-guide.md)
+- [Frontend development](frontend/README.md)
+- [Architecture, data pipelines and protocol reference](docs/architecture.md)
+- [Microphone return details](docs/headset-return-audio.md)
+- [SCO duplex setup, validation and recovery](docs/sco-duplex.md)
+- [Measurements and their limits](docs/rtsp-measurements.md)
 
-Browser talkback sends WebRTC audio through WHIP. The PC sends HMAC-authenticated TB2 datagrams to MaixCAM with session IDs, sequence numbers, timestamps, bounded jitter buffering, and stale-packet dropping. Each talk session calibrates packet timestamps through the authenticated camera clock endpoint, so Windows clock skew does not block playback. Deploy current `bluetooth_control.py` on the camera; older cameras still require PC/camera clocks within two seconds. Update the PC and camera receiver together: TB1 packets are rejected.
-
-The PC operator reads the repository's `.talkback_token`, while the camera receiver and Bluetooth control service read `/root/.talkback_token`. They must contain the same value. The repository also includes `auto.key`; Docker does not use it. Hold **Hold to Talk** while speaking; release it to stop. If talkback is unavailable, check `GET /api/talkback/status`, the camera's UDP port 9002, and its receiver log. If device scanning fails, check TCP 8765 connectivity and `/root/bluetooth-audio.log` on the camera.
-
-The operator server serves the page, recording API, talkback API, Bluetooth control API, and MP4 files. `app.py` runs that server as part of the host stack.
-
-## Copy and run on MaixCAM (192.168.1.7)
-
-For a new or reset MaixCAM, install PuTTY and put `plink` and `pscp` on `PATH`. From PowerShell on the laptop, upload the MaixCAM programs, app metadata, background startup template, and included token. The script uses the project root for source files even if launched from another directory. The MaixCAM root password is `root` on this device. This transport migration requires updating the microphone publisher, talkback receiver, and shared protocol module together after local verification.
-
-```powershell
-./upload_maix.ps1 -MaixHost 192.168.1.7 -Password root -HostKey 'SHA256:MMjQMht0IcoEBBkw5OVPuwa2wrbSHpiEYHn27tdGcmY'
-```
-
-PuTTY batch mode needs a trusted host key. The `-HostKey` value above pins the fingerprint reported by your MaixCAM; check it again if the device's SSH key changes. You can use `-KeyPath` instead of `-Password` if SSH key authentication is configured. The script validates all files before upload, backs up every existing target into a private timestamped directory before overwriting, and checks each remote command. It uploads files only; restart the MaixCAM programs after updating them. If Windows blocks the script as unsigned, run `Set-ExecutionPolicy -Scope Process Bypass` in that terminal first.
-
-Use the Maix [app auto-start mechanism](https://en.wiki.sipeed.com/maixpy/doc/en/basic/auto_start.html) for RTSP. The built-in `rtsp_stream` app fails on this device because it tries to open a touchscreen, so install the supplied touchscreen-free app. These commands do not edit `/etc/init.d`:
-
-```powershell
-plink -batch -hostkey 'SHA256:MMjQMht0IcoEBBkw5OVPuwa2wrbSHpiEYHn27tdGcmY' -pw root root@192.168.1.7 'mkdir -p /maixapp/apps/maix_rtsp && cp /root/rtsp_av.py /maixapp/apps/maix_rtsp/main.py && cp /root/rtsp_app.yaml /maixapp/apps/maix_rtsp/app.yaml && python3 /maixapp/apps/gen_app_info.py /maixapp/apps && printf maix_rtsp > /maixapp/auto_start.txt'
-```
-
-For Bluetooth and talkback, back up the current `/etc/rc.local`, then copy the supplied template. It starts only background audio processes; the camera stays under the app launcher:
-
-```powershell
-plink -batch -hostkey 'SHA256:MMjQMht0IcoEBBkw5OVPuwa2wrbSHpiEYHn27tdGcmY' -pw root root@192.168.1.7 'cp -p /etc/rc.local /etc/rc.local.maixcam-original && cp /root/background_services.rc.local /etc/rc.local && sh -n /etc/rc.local && reboot'
-```
-
-After boot, `rtsp://192.168.1.7:8554/live` should serve camera video, UDP 9002 should have one talkback receiver, and `/root/headset-mic-stream.log` should show the headset mic publisher retrying until the laptop relay starts. Do not launch duplicate copies in SSH terminals. Power on the bound earbuds and release their connection to another device; MaixCAM retries automatically. To replace the earbuds deliberately, update `--fixed-mac` in the startup template, reinstall it, and restart the Bluetooth and microphone services. To disable RTSP auto-start, remove `/maixapp/auto_start.txt` and reboot. To restore the original background startup file, copy `/etc/rc.local.maixcam-original` back to `/etc/rc.local` and reboot. A firmware reflash changes the SSH host key, so verify the new fingerprint before using these commands.
-
-## Demo
-
-![Demo](imgs/image.png)
-
-- Currently, only recording, talkback, and Bluetooth control are implemented. The operator page can be extended with additional features.
-
-## USB diagnostic fallback
-
-MaixCAM's verified USB addresses are `10.172.16.1` (NCM / usb1) and `10.172.17.1` (RNDIS / usb0). The PC uses `.100` on those subnets. The default diagnostic fallback is `10.172.16.1`; override with `MAIX_USB_IP` or `--maix-usb-ip`.
-
-Open **Settings → Camera Diagnostics → Diagnose camera**, or run `python -m pc.camera_diagnostics`. Diagnostics check SSH (22), RTSP control (8554), and Bluetooth control (8765) on Wi-Fi, then on USB if all Wi-Fi service checks fail. TCP reachability does not verify UDP media delivery. Media continues to use `MAIX_IP`; USB provides access for diagnosis. The deployed camera has a working RTSP listener and verified UDP video delivery to the native PC stack.
-## RTSP transport selection
-
-The code defaults remain UDP and combined; this machine's saved `.env` overrides
-them with TCP and video-only. Select `python app.py --rtsp-transport tcp --stream-mode video` to use
-TCP-interleaved media; startup verifies actual camera video packets before
-replacing the running stack. Use `--stream-mode video|audio|combined` for isolated
-inputs. The camera headset publisher must use the matching transport; direct
-RTP audio remains UDP. Browser WebRTC and sequenced-UDP talkback are preserved.
-See [configuration and measurement instructions](docs/rtsp-transport.md).
-
-## Earbuds microphone return
-
-The independent return-audio implementation and hardware test/deployment commands
-are in [the headset return guide](docs/headset-return-audio.md). The native helper
-now enables a separate PCMU receiver on UDP 8004; `/maix01` and recordings stay
-video-only. Use `-ReturnAudioPort 0` for a video-only baseline. The default camera
-talkback still pauses microphone capture; simultaneous speech requires verified
-SCO duplex and the explicit camera options described in that guide. The
-`experiment/sco-duplex` branch provides a user-tested, audible full-duplex trial
-with 120-byte controller packets and explicit SCO buffering. Return quality
-remains poor; default A2DP startup is preserved. See [SCO procedure and rollback](docs/sco-duplex.md).
+| Folder | Contents |
+| --- | --- |
+| `maix/` | Camera and Bluetooth programs installed on MaixCAM. |
+| `pc/` | Docker operator, media handling, recording and diagnostic tools. |
+| `frontend/` | Browser interface source, build tools and browser tests. |
+| `tests/` | Automated backend and deployment checks. |
+| `docs/` | Installer guides and dated engineering evidence. |
+| `imgs/` | Demonstration screenshots used in this guide. |
+| `recordings/` | Your saved recordings; created locally and excluded from Git. |

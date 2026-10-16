@@ -13,3 +13,5 @@ frontend/playwright-report/
 
 .runtime/
 .env
+.talkback_token
+pc/operator_test.html

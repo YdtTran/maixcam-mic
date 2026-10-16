@@ -1,32 +1,24 @@
 # PC multistream recording
 
-Implemented as an opt-in extension. The live TCP/video monitoring route,
-MaixCAM firmware, Bluetooth transport, headset RTP receiver and talkback relay
-are unchanged. The default recorder remains the existing `legacy` recorder.
+Multistream is the default PC recorder for the SCO duplex pipeline. The live
+TCP/video monitoring route, headset RTP receiver and talkback relay remain
+independent of recording. The `legacy` video-only recorder is an explicit fallback.
 Physical A/V synchronization and VLC acceptance have **not** been measured.
 
-## Enable and roll back
+## Configure and roll back
 
-After stopping the current recording and waiting for finalization, stop the
-native operator with `./stop_operator.ps1`. Start the extension with:
-
-```powershell
-.\start_operator.ps1 -RecordingMode multistream
-```
-
-The helper rejects a running operator with a different recording mode instead
-of replacing it. The direct equivalent, retaining the current media settings:
+After stopping the current recording and waiting for finalization, set
+`RECORDING_MODE=multistream` in the project `.env`, then run:
 
 ```powershell
-python app.py --maix-ip 192.168.1.7 --rtsp-transport tcp --stream-mode video --return-audio-port 8004 --recording-mode multistream
+.\deploy_pc.ps1 -Build
 ```
 
-For rollback, stop recording, wait for finalization, stop the operator and run
-`./start_operator.ps1 -RecordingMode legacy`. No camera rollback is necessary.
-`--recording-mode` is independent of `--stream-mode`; do not change live stream
-mode to `combined` to enable this feature. No MediaMTX configuration change or
-new Python dependency is required. FFmpeg must support `alimiter`'s `latency`
-option; the tested build is FFmpeg 9.0.1 on Windows.
+For rollback, finish recording, set `RECORDING_MODE=legacy`, and run
+`./deploy_pc.ps1` again. No camera rollback is necessary. Keep
+`RTSP_TRANSPORT=tcp` and `STREAM_MODE=video`; recording mode is independent of
+live stream selection. The Docker image supplies FFmpeg and builds the UI.
+The deployment helper refuses to update during recording or finalization.
 
 ## Architecture and output
 

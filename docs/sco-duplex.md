@@ -6,7 +6,8 @@ with explicit 20 ms playback periods / 80 ms buffers and a 120-byte SCO MTU
 override. Playback uses raw PCM and feeds silence at 20 ms deadlines during
 packet gaps in an active session, avoiding repeated buffer starvation.
 TCP/video, independent PCMU return on UDP8004, and video-only
-recordings keep their existing paths. A2DP/half-duplex remains the default.
+recordings keep their existing paths. Camera deployment defaults to SCO duplex;
+explicit `-AudioProfile a2dp` selects the half-duplex fallback.
 
 The MaixCAM BlueALSA 4.1.1 build lists only CVSD for HFP; mSBC is absent.
 The available PCM is S16_LE, 8000 Hz, mono. SCO permits simultaneous audio;
@@ -26,7 +27,7 @@ Wait until no `aplay` or `arecord` owns SCO and `hcitool con` has no SCO link.
 Do not start a second capture owner.
 
 ```sh
-hciconfig hci0 scomtu 120:4
+python3 /root/bluetooth_audio.py --fixed-mac 6C:16:29:7B:00:D4 --playback-profile sco --sco-mtu 120 --prepare-sco
 nohup python3 /root/bluetooth_audio.py --fixed-mac 6C:16:29:7B:00:D4 --playback-profile sco --sco-mtu 120 --recover-stuck-sco </dev/null >>/root/bluetooth-audio-sco.log 2>&1 &
 ```
 
@@ -52,11 +53,18 @@ during recovery. Prefer closing all SCO clients before a deliberate disconnect.
 This workaround is specific to the inspected controller; it is not a generic
 Bluetooth recommendation. It retains the controller's reported packet count.
 
-The optional [SCO startup template](../maix/background_services.sco.rc.local)
-sets MTU before capture. It is **not installed by the live trial**. Install it
-only after speech, repeated holds/releases, return recovery and reboot testing
-are acceptable. Save the actual original `/etc/rc.local`; the generic A2DP
-template may differ from the deployed camera's RTP arguments.
+The shared [startup template](../maix/background_services.rc.local) now reads
+`AUDIO_PROFILE` from `/root/workercam.env`. Camera deployment with
+`deploy_maix.ps1 -AudioProfile sco` installs the default SCO settings;
+`-AudioProfile a2dp` selects the fallback. The separate experimental startup file was consolidated into this
+parameterized template. Apply a rebooting deployment only after the acceptance
+checks below pass. Save the actual original `/etc/rc.local` for rollback.
+
+SCO startup prepares the powered controller and verifies MTU before launching
+any audio clients. Setting MTU while the controller is down is insufficient:
+power-up restores its reported buffer size, and capture can otherwise open an
+old-size socket before the connector corrects the value. Preparation retries
+before audio starts. See [boot-order repair evidence](sessions/2026-10-11-sco-boot-order.md).
 
 ## Acceptance
 

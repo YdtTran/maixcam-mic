@@ -1,8 +1,7 @@
 """Read original and delayed stopwatches from the SAME desktop capture.
 
-Requires Windows FFmpeg gdigrab and built-in Windows OCR. No app input is sent.
-Uncertain/ambiguous readings are rejected and retained as local evidence.
-Manual CSV readings are supported when OCR cannot recognize the camera image.
+Capture requires Windows FFmpeg gdigrab. No app input is sent.
+Read saved images manually and supply a CSV; unreliable OCR has been removed.
 """
 import argparse
 import csv
@@ -69,37 +68,16 @@ def measure(args):
                 subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(image),
                     "-vf", f"crop={width}:{height}:{x}:{y},scale=iw*2:ih*2", "-frames:v", "1", "-y", str(crop)],
                     check=True, capture_output=True, timeout=10)
-            if args.capture_only:
-                sample["evidence"] = str(image)
-                sample["error"] = "Awaiting manual readings from the saved simultaneous capture"
-                samples.append(sample)
-                (args.output / "latency.json").write_text(json.dumps(summarize(samples), indent=2))
-                with (args.output / "readings.csv").open("w", newline="") as file:
-                    writer = csv.writer(file)
-                    writer.writerow(["elapsed_seconds", "reference", "feed"])
-                    writer.writerows([s["elapsed_seconds"], "", ""] for s in samples)
-                print(str(image), flush=True)
-                if index + 1 < args.samples:
-                    time.sleep(max(0, started + (index + 1) * args.interval - time.monotonic()))
-                continue
-            result = subprocess.run(["powershell.exe", "-NoProfile", "-File",
-                str(Path(__file__).with_name("read_stopwatch.ps1")), "-ReferenceImage", str(crops[0]),
-                "-FeedImage", str(crops[1])],
-                capture_output=True, text=True, timeout=15)
-            if result.returncode:
-                raise ValueError(result.stderr.strip())
-            readings = json.loads(result.stdout)
-            sample["ocr_readings"] = readings
-            reference = stopwatch_ms(readings[0]["text"])
-            feed = stopwatch_ms(readings[1]["text"])
-            delay = reference - feed
-            if not 0 <= delay <= args.max_delay_ms:
-                raise ValueError("Delay outside configured bounds; reset/wrap or OCR error")
-            sample.update(reference_ms=reference, feed_ms=feed, latency_ms=delay)
+            sample["evidence"] = str(image)
+            sample["error"] = "Awaiting manual readings from the saved simultaneous capture"
         except (ValueError, OSError, subprocess.SubprocessError, IndexError) as error:
             sample["error"] = str(error)
         samples.append(sample)
         (args.output / "latency.json").write_text(json.dumps(summarize(samples), indent=2))
+        with (args.output / "readings.csv").open("w", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow(["elapsed_seconds", "reference", "feed"])
+            writer.writerows([s["elapsed_seconds"], "", ""] for s in samples)
         print(json.dumps(sample), flush=True)
         if index + 1 < args.samples:
             time.sleep(max(0, started + (index + 1) * args.interval - time.monotonic()))
@@ -117,7 +95,7 @@ def main():
     parser.add_argument("--max-delay-ms", type=int, default=60000)
     parser.add_argument("--output", type=Path, default=Path(".runtime/video-latency"))
     parser.add_argument("--manual-csv", type=Path, help="elapsed_seconds,reference,feed; both readings from one image")
-    parser.add_argument("--capture-only", action="store_true", help="Save simultaneous snapshots and CSV template; skip OCR")
+    parser.add_argument("--capture-only", action="store_true", help="Compatibility flag; capture always saves images for manual reading")
     args = parser.parse_args()
     if args.samples < 1 or args.interval <= 0:
         parser.error("samples and interval must be positive")

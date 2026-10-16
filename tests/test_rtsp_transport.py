@@ -27,8 +27,8 @@ class TransportTests(unittest.TestCase):
 
     def test_defaults_and_environment_validate_transport(self):
         with patch.dict("os.environ", {"RTSP_TRANSPORT": "tcp", "STREAM_MODE": "audio", "HEADSET_RTP_PORT": ""}):
-            self.assertEqual(app.parse_args([]).rtsp_transport, "tcp")
-            self.assertEqual(app.parse_args([]).stream_mode, "audio")
+            self.assertEqual(app.parse_args(["--recording-mode", "legacy"]).rtsp_transport, "tcp")
+            self.assertEqual(app.parse_args(["--recording-mode", "legacy"]).stream_mode, "audio")
         with patch.dict("os.environ", {"RTSP_TRANSPORT": "invalid"}), patch("sys.stderr"):
             with self.assertRaises(SystemExit):
                 app.parse_args([])
@@ -67,7 +67,7 @@ class TransportTests(unittest.TestCase):
             process = Mock()
             process.poll.return_value = None
             spawn = Mock(return_value=process)
-            manager = RecordingManager(directory, spawn=spawn, transport="tcp", mode="audio")
+            manager = RecordingManager(directory, spawn=spawn, transport="tcp", mode="audio", recording_mode="legacy")
             manager.start()
             command = spawn.call_args.args[0]
             self.assertNotIn("-c:v", command)

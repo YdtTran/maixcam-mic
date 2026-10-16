@@ -17,6 +17,12 @@ def fake_media_executable():
 
 
 class AppTests(unittest.TestCase):
+    def test_multistream_default_and_explicit_legacy_fallback(self):
+        self.assertEqual(app.parse_args(["--stream-mode", "video"]).recording_mode, "multistream")
+        self.assertEqual(app.parse_args(["--recording-mode", "legacy", "--stream-mode", "audio"]).recording_mode, "legacy")
+        with patch("sys.stderr"), self.assertRaises(SystemExit):
+            app.parse_args(["--stream-mode", "audio"])
+
     def test_media_buffer_respects_linux_kernel_limit(self):
         with TemporaryDirectory() as directory:
             config = Path(directory) / "mediamtx.yml"

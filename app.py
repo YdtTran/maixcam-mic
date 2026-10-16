@@ -142,8 +142,8 @@ def parse_args(argv=None):
     parser.add_argument("--bind-host", default="127.0.0.1", help="Operator page bind address")
     parser.add_argument("--port", type=int, default=8000, help="Operator page port")
     parser.add_argument("--recordings", type=Path, default=Path("recordings"))
-    parser.add_argument("--recording-mode", choices=("legacy", "multistream"), default="legacy",
-                        help="Opt-in PC multistream recorder; independent of live stream mode")
+    parser.add_argument("--recording-mode", choices=("legacy", "multistream"), default="multistream",
+                        help="PC recorder (default: multistream); independent of live stream mode")
     parser.add_argument("--talkback-token", type=Path, default=ROOT / ".talkback_token")
     parser.add_argument("--rtsp-transport", choices=("tcp", "udp"),
                         default=os.environ.get("RTSP_TRANSPORT", "udp"))

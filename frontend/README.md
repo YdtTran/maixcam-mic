@@ -3,53 +3,44 @@
 React, TypeScript, Vite, and Lucide. This replaces the old operator page;
 the Python backend and physical MaixCAM programs are unchanged.
 
-## Deployed operator page
+## Deployment and development
 
-The current Windows deployment uses native `app.py` in TCP video-only mode.
-Open **http://127.0.0.1:8000/operator_test.html**, sign in with **admin / admin**,
-and select **Worker #07**. This compiled page does not require Vite or a separate
-frontend service. It can open while MaixCAM is offline; video and talkback require
-the camera's existing services.
+Customer deployment runs entirely in Docker: from the project root, run
+`./deploy_pc.ps1 -Build`, or `./run_all.ps1 -Build` to also open the browser.
+The build packages this interface into the operator image. The page is available
+at http://127.0.0.1:8000; Worker #07 connects to MaixCAM and Worker #12 is a demo.
+See the [customer README](../README.md) for configuration and daily use.
 
-Docker Desktop localhost access failed even after restart on 2026-10-10, so the
-operator container is stopped and a hidden native stack is running. Its PID/logs
-are in `.runtime/operator-native.*`; do not run both stacks. Follow the
-[root README](../README.md#run-the-configured-stack) for startup and evidence.
-Earbuds → MaixCAM → PC audio remains unimplemented; current video and recordings
-have no microphone track. The user reports acceptable video and PC talkback
-latency, but physical playback was not retested after the native workaround.
-
-## Frontend development
-
-From this directory:
+For source development only, install Node.js and run from this directory:
 
 ```powershell
 npm ci
 npm run dev
 ```
 
-Open http://localhost:5173. Vite proxies `/api` to the existing PC server on
-port 8000. Start that server separately using the project README. The default
-WHEP stream is `http://<browser-host>:8889/maix01/whep`.
+Vite serves http://localhost:5173 and proxies `/api` to the Docker operator on
+port 8000. The default browser media endpoint is on localhost port 8889.
 
 ```powershell
 npm run build
+npx playwright install chromium
+npm test
 ```
 
-Build type-checks the sources and replaces `../pc/operator_test.html` with a
-self-contained compiled page. The existing server serves it at `/` and
-`/operator_test.html`. Docker builds this same page in a Node build stage;
-`docker compose -f compose.yaml -f compose.host.yaml up --build -d`, from the
-project root after stopping native services, builds and starts the Docker route.
-Windows access through that route currently remains unresolved.
-For native deployment, run `.\start_operator.ps1 -Build` from the project root
-to rebuild this compiled page and start or reuse the working Windows stack.
-Use `.\stop_operator.ps1` after stopping recording when shutting it down.
-No frontend service or backend route changes are needed.
+The build generates `../pc/operator_test.html`; it is ignored by Git and rebuilt
+inside Docker, so no duplicate compiled UI is maintained in source control.
+Browser tests exercise both source and compiled interfaces using mocked camera
+APIs and media signaling. They do not control the physical camera.
 
-Run `npx playwright install chromium` once, then `npm test` for browser checks
-against both the Vite source app and the compiled single-file page. Tests mock
-camera APIs and media signaling; they do not control the physical MaixCAM.
+`src/demo.ts` and `scripts/demo-scene.svg` are retained source assets: the former
+embeds the offline demonstration clip and the latter is its regeneration input.
+Media probes and measurement scripts remain developer tools, excluded from the
+customer image. Python tests run from the root with
+`python -m unittest discover -s tests -v`.
+
+After `npm run build`, run `node scripts/capture-readme.mjs` to regenerate the
+README screenshots. It serves the compiled page on an isolated local port,
+mocks unavailable camera APIs and uses Worker #12's demo. No device is contacted.
 
 ## Data and authentication boundaries
 

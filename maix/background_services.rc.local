@@ -1,7 +1,22 @@
 #!/bin/sh
 
-# Camera RTSP is managed by the Maix app launcher, not by this script.
+# Installed by deploy_maix.ps1. Camera video is managed by the Maix app launcher.
 export HOME=/root
-nohup python3 /root/bluetooth_audio.py --fixed-mac 6C:16:29:7B:00:D4 </dev/null >>/root/bluetooth-audio.log 2>&1 &
-nohup python3 /root/talkback_receiver.py </dev/null >>/root/talkback-receiver.log 2>&1 &
-nohup python3 /root/headset_mic_stream.py --target 192.168.1.4 </dev/null >>/root/headset-mic-stream.log 2>&1 &
+. /root/workercam.env || exit 1
+: "${PC_IP:?Missing PC_IP}" "${HEADSET_MAC:?Missing HEADSET_MAC}"
+case "${AUDIO_PROFILE:-sco}" in
+    a2dp) bluetooth_options=''; talkback_options='' ;;
+    sco)
+        # Controller power-up resets SCO MTU. Complete it and verify the override
+        # before BlueALSA, capture or playback can create their first SCO socket.
+        until python3 /root/bluetooth_audio.py --fixed-mac "$HEADSET_MAC" --playback-profile sco --sco-mtu 120 --prepare-sco >>/root/bluetooth-audio.log 2>&1; do
+            sleep 3
+        done
+        bluetooth_options='--playback-profile sco --sco-mtu 120 --recover-stuck-sco'
+        talkback_options='--duplex --playback-profile sco'
+        ;;
+    *) echo 'Invalid AUDIO_PROFILE' >&2; exit 1 ;;
+esac
+nohup python3 /root/bluetooth_audio.py --fixed-mac "$HEADSET_MAC" $bluetooth_options </dev/null >>/root/bluetooth-audio.log 2>&1 &
+nohup python3 /root/talkback_receiver.py $talkback_options </dev/null >>/root/talkback-receiver.log 2>&1 &
+nohup python3 /root/headset_mic_stream.py --target "$PC_IP" --rtp-port 8004 </dev/null >>/root/headset-mic-stream.log 2>&1 &

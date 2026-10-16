@@ -4,10 +4,12 @@ The new path is SCO capture → PCM16/8 kHz/mono → G.711 mu-law RTP
 (payload type 0, 160 samples/20 ms, 172-byte packets) → PC UDP 8004
 (RTCP 8005) → independent FFmpeg codec-copy receiver → MediaMTX
 `/headsetmic` via RTSP/TCP → separate browser WHEP audio element.
-`/maix01` remains TCP video-only and its recorder remains video-only.
+`/maix01` remains TCP video-only and the legacy recorder remains video-only.
+The optional [multistream recorder](multistream-recording.md) consumes the
+independent audio paths without changing live video.
 
 The receiver is opt-in in `app.py` with `--return-audio-port 8004`.
-`start_operator.ps1` enables it by default; `-ReturnAudioPort 0` disables it.
+`compose.yaml` enables independent return on UDP 8004; use `deploy_pc.ps1` for PC deployment.
 Use video mode with this option. The older `--headset-rtp-port` option is
 for the combined publisher and does not enable this independent service.
 Do not run the RTSP camera `/headsetmic` publisher alongside this RTP receiver:
@@ -175,13 +177,11 @@ restores capture pause. No camera video service should be stopped.
 On Windows, stop recording in the UI, then:
 
 ```powershell
-.\stop_operator.ps1
-.\start_operator.ps1 -Build -ReturnAudioPort 8004
-# Direct alternative, after stopping the old stack:
-# python app.py --maix-ip 192.168.1.7 --rtsp-transport tcp --stream-mode video --return-audio-port 8004
-Get-Content .runtime/headset-return.ffmpeg.log -Tail 30
-ffprobe -v error -rtsp_transport tcp -show_streams rtsp://127.0.0.1:8554/headsetmic
-ffprobe -v error -rtsp_transport tcp -show_streams rtsp://127.0.0.1:8554/maix01
+.\stop_docker_pc.ps1
+.\deploy_pc.ps1 -Build
+docker compose exec server cat .runtime/headset-return.ffmpeg.log
+docker compose exec server ffprobe -v error -rtsp_transport tcp -show_streams rtsp://127.0.0.1:8554/headsetmic
+docker compose exec server ffprobe -v error -rtsp_transport tcp -show_streams rtsp://127.0.0.1:8554/maix01
 ```
 
 Expect `pcm_mulaw`, 8000 Hz, mono on `/headsetmic`, and H.264 only on `/maix01`.
@@ -193,7 +193,7 @@ if needed, run this scoped rule once in an elevated PowerShell:
 New-NetFirewallRule -DisplayName 'MaixCAM headset RTP' -Direction Inbound -Action Allow -Protocol UDP -LocalPort 8004,8005 -RemoteAddress 192.168.1.7 -Profile Private
 ```
 
-Logs: `.runtime/headset-return.ffmpeg.log` and one previous attempt; capture
+Container logs: `.runtime/headset-return.ffmpeg.log` and one previous attempt; capture
 errors appear in `/root/headset-mic-stream.log`. Receiver publication loss after
 a 15-second startup grace triggers retries of 2/4/8/16/30 seconds, capped at 30;
 health checks run every 5 seconds. Healthy publication resets backoff. Closing
