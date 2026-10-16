@@ -122,3 +122,23 @@ its required camera/PC modules together with automatic network deployment.
 - Staged diff check passed; credential-pattern scan found no matches.
 - `.env`, `.talkback_token`, `.runtime/` and recordings remain ignored and excluded.
 - Git publication does not restart or redeploy the running devices.
+
+Publication completed: implementation checkpoint `10cf819` was committed,
+local `main` fast-forwarded, and `origin/main` pushed without force. GitHub's
+default branch is already `main`. Local and remote commit IDs matched.
+
+Switching through the older main revision removed the ignored local pairing
+token and generated UI because that older revision still tracked those paths.
+Restored the exact existing token from the camera and packaged UI from the
+running container; no token was regenerated. SHA256 comparisons confirmed the
+camera, local and container tokens match. Both paths remain ignored by Git.
+
+User unplugged USB and requested Wi-Fi verification. Used Windows OpenSSH over
+camera Wi-Fi `10.127.15.230`, bound to laptop Wi-Fi `10.127.9.237`, checking the
+previously verified camera host identity. Camera settings/processes, Docker
+health, actual video/headset-stream decoding and diagnostics/talkback APIs all
+passed. No restart/redeploy was performed during this verification.
+
+Final Bluetooth API status on two reads: fixed headset selected, connected=false.
+The headset stream can decode without establishing current earbud speech capture;
+audible duplex is not confirmed. No Bluetooth reset or pairing change performed.
