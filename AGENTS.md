@@ -5,6 +5,8 @@ to detailed evidence; session logs preserve the history. Last updated: 2026-10-1
 
 ## Current State and User Decisions
 
+- **Restored commit redeployed (2026-10-16):** User requested latest-commit restore and redeployment of both devices. Camera installed/rebooted and Docker rebuilt healthy from  `6e55f38`. Clear 640×480 landscape video visually verified in Chromium. SCO connected at MTU120; PC stop/start restored initially missing G711 return. Talkback available; audible acceptance untested. See [deployment log](docs/sessions/2026-10-16-restored-commit-redeployment.md).
+
 - **Architecture reference and safe local cleanup (2026-10-16):** User reports
   the architecture works well and requests documentation without code changes.
   Added source-checked architecture/pipeline/protocol reference and rendered
