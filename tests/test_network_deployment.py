@@ -95,10 +95,33 @@ $result = Invoke-NetworkProcess $shell @('-NoProfile','-NonInteractive','-Comman
 if ($result -cne 'a "quoted" value') { throw 'Stdin damaged' }
 $result = Invoke-NetworkProcess $shell @('-NoProfile','-NonInteractive','-Command','[Console]::Write("a b")')
 if ($result -cne 'a b') { throw 'Arguments damaged' }
-try { Invoke-NetworkProcess $shell @('-NoProfile','-Command','exit 7'); throw 'Exit ignored' }
-catch { if ($_.Exception.Message -notlike '*failed (7)*') { throw } }
-try { Invoke-NetworkProcess $shell @('-NoProfile','-Command','Start-Sleep 30') -TimeoutSeconds 1; throw 'Timeout ignored' }
-catch { if ($_.Exception.Message -notlike '*timed out*') { throw } }
+foreach ($streamOutput in @($false, $true)) {
+    try { Invoke-NetworkProcess $shell @('-NoProfile','-Command','exit 7') -StreamOutput:$streamOutput; throw 'Exit ignored' }
+    catch { if ($_.Exception.Message -notlike '*failed (7)*') { throw } }
+    try { Invoke-NetworkProcess $shell @('-NoProfile','-Command','Start-Sleep 30') -TimeoutSeconds 1 -StreamOutput:$streamOutput; throw 'Timeout ignored' }
+    catch { if ($_.Exception.Message -notlike '*timed out*') { throw } }
+}
+''')
+
+    def test_process_streams_stdout_and_stderr_before_child_finishes(self):
+        self.run_ps(r'''
+$marker = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N'))
+$sawLiveOutput = $false
+$sawDiagnostic = $false
+$command = "[Console]::WriteLine('READY'); Start-Sleep -Seconds 2; [IO.File]::WriteAllText(`$env:STREAM_TEST_MARKER,'done'); [Console]::Error.WriteLine('DIAGNOSTIC')"
+try {
+    Invoke-NetworkProcess (Join-Path $PSHOME 'powershell.exe') @('-NoProfile','-NonInteractive','-Command',$command) -StreamOutput -Environment @{STREAM_TEST_MARKER=$marker} 6>&1 |
+        ForEach-Object {
+            if ($_ -is [Management.Automation.InformationRecord]) {
+                if ($_.ToString() -eq 'READY') {
+                    if (Test-Path -LiteralPath $marker) { throw 'Output was buffered until the child finished' }
+                    $sawLiveOutput = $true
+                }
+                if ($_.ToString() -eq 'DIAGNOSTIC') { $sawDiagnostic = $true }
+            }
+        }
+    if (-not $sawLiveOutput -or -not $sawDiagnostic) { throw 'Missing streamed stdout/stderr' }
+} finally { if (Test-Path -LiteralPath $marker) { Remove-Item -LiteralPath $marker } }
 ''')
 
     def deployment_fixture(self, root):

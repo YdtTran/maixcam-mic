@@ -55,9 +55,8 @@ PY
 function Invoke-ProjectScript {
     param([string]$Name, [string[]]$Arguments = @())
     $shell = (Get-Process -Id $PID).Path
-    $output = Invoke-NetworkProcess $shell (@('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-        '-File', (Join-Path $root $Name)) + $Arguments) -TimeoutSeconds $DeploymentTimeoutSeconds
-    if ($output) { Write-Host $output }
+    Invoke-NetworkProcess $shell (@('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+        '-File', (Join-Path $root $Name)) + $Arguments) -TimeoutSeconds $DeploymentTimeoutSeconds -StreamOutput | Out-Null
 }
 
 function Get-DeploymentHash {

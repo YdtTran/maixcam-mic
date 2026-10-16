@@ -157,6 +157,12 @@ Exit codes: **0** completed/verified or dry run; **2** local preflight;
 network probes have deadlines; `-DeploymentTimeoutSeconds` controls each PC
 deployment subprocess (default 900 seconds).
 
+PC deployment displays stages `[PC 1/5]` through `[PC 5/5]` and streams Docker
+build/start output immediately. The first build downloads base images and npm/
+Debian dependencies and can take several minutes. If progress stops, report the
+last stage and Docker output. Inspect `docker compose ps` and, if a container was
+created, `docker compose logs --tail 80 server` from a second terminal.
+
 Tests: `python -m unittest tests.test_network_deployment tests.test_start_scripts -v`.
 They exercise adapter/route selection, subnet boundaries, exact configuration
 preservation, timeout/failure handling, dry-run immutability, repeat/force

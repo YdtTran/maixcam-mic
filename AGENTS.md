@@ -5,6 +5,14 @@ to detailed evidence; session logs preserve the history. Last updated: 2026-10-1
 
 ## Current State and User Decisions
 
+- **Visible PC deployment progress (2026-10-16):** User reports another laptop
+  blocked at `deploy_pc.ps1`; exact remote error/output still pending. Confirmed
+  wrapper buffered all PC output until exit. PC subprocess logs now stream live
+  and display five deployment stages. 22 focused tests and real local read-only
+  PC preflight passed; no runtime restart. Video supports concurrent RTSP readers,
+  but headset return still targets one PC and talkback is not coordinated across
+  servers. See [evidence](docs/sessions/2026-10-16-deployment-progress.md).
+
 - **Automatic Windows network deployment (2026-10-16):** User requests USB-first
   address discovery and one-command full redeployment using Windows OpenSSH only.
   Added `scripts/deploy.ps1`, a shared PowerShell helper and deployment guide.

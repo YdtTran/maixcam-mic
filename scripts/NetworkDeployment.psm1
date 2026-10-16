@@ -3,7 +3,7 @@ Set-StrictMode -Version Latest
 function Invoke-NetworkProcess {
     [CmdletBinding()]
     param([string]$FilePath, [string[]]$Arguments, [int]$TimeoutSeconds = 45,
-        [string]$InputText, [hashtable]$Environment = @{})
+        [string]$InputText, [hashtable]$Environment = @{}, [switch]$StreamOutput)
     # Windows command-line quoting, also supported by Windows PowerShell 5.1.
     $quoted = foreach ($argument in $Arguments) {
         '"' + [regex]::Replace([regex]::Replace($argument, '(\\*)"', '$1$1\"'), '(\\+)$', '$1$1') + '"'
@@ -21,21 +21,54 @@ function Invoke-NetworkProcess {
     $process.StartInfo = $info
     try {
         [void]$process.Start()
-        $output = $process.StandardOutput.ReadToEndAsync()
-        $errors = $process.StandardError.ReadToEndAsync()
+        if ($StreamOutput) {
+            $streams = @(
+                @{ Reader = $process.StandardOutput; Buffer = (New-Object Text.StringBuilder); Done = $false },
+                @{ Reader = $process.StandardError; Buffer = (New-Object Text.StringBuilder); Done = $false }
+            )
+            foreach ($stream in $streams) { $stream.Task = $stream.Reader.ReadLineAsync() }
+        } else {
+            $output = $process.StandardOutput.ReadToEndAsync()
+            $errors = $process.StandardError.ReadToEndAsync()
+        }
         if ($InputText) { $process.StandardInput.Write($InputText.Replace("`r`n", "`n")) }
         $process.StandardInput.Close()
-        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-            # Kill the command and descendants (including a blocked SSH child).
-            & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null
-            throw "$([IO.Path]::GetFileName($FilePath)) timed out after $TimeoutSeconds seconds."
+        if ($StreamOutput) {
+            $watch = [Diagnostics.Stopwatch]::StartNew()
+            do {
+                foreach ($stream in $streams) {
+                    if (-not $stream.Done -and $stream.Task.IsCompleted) {
+                        $line = $stream.Task.GetAwaiter().GetResult()
+                        if ($null -eq $line) { $stream.Done = $true }
+                        else {
+                            [void]$stream.Buffer.AppendLine($line)
+                            Write-Host $line
+                            $stream.Task = $stream.Reader.ReadLineAsync()
+                        }
+                    }
+                }
+                if ($watch.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+                    if (-not $process.HasExited) { & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null }
+                    throw "$([IO.Path]::GetFileName($FilePath)) timed out after $TimeoutSeconds seconds."
+                }
+                Start-Sleep -Milliseconds 10
+            } while (-not $process.HasExited -or @($streams | Where-Object { -not $_.Done }).Count)
+            $process.WaitForExit()
+            $result = $streams[0].Buffer.ToString()
+            $errorText = $streams[1].Buffer.ToString()
+        } else {
+            if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+                # Kill the command and descendants (including a blocked SSH child).
+                & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null
+                throw "$([IO.Path]::GetFileName($FilePath)) timed out after $TimeoutSeconds seconds."
+            }
+            $result = $output.GetAwaiter().GetResult()
+            $errorText = $errors.GetAwaiter().GetResult()
         }
-        $result = $output.GetAwaiter().GetResult()
-        $errorText = $errors.GetAwaiter().GetResult()
         if ($process.ExitCode -ne 0) {
             throw "$([IO.Path]::GetFileName($FilePath)) failed ($($process.ExitCode)): $errorText $result"
         }
-        if ($errorText) { Write-Verbose $errorText.Trim() }
+        if ($errorText -and -not $StreamOutput) { Write-Verbose $errorText.Trim() }
         return $result.Trim()
     } finally { $process.Dispose() }
 }
