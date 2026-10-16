@@ -18,6 +18,35 @@ class DeploymentScriptTests(unittest.TestCase):
             root = Path(directory)
             for source in ROOT.glob("*.ps1"):
                 shutil.copy2(source, root / source.name)
+            (root / "scripts").mkdir()
+            shutil.copy2(ROOT / "scripts/NetworkDeployment.psm1", root / "scripts/NetworkDeployment.psm1")
+            with (root / "scripts/NetworkDeployment.psm1").open("a") as module:
+                module.write(r'''
+function Invoke-NetworkProcess {
+    param($FilePath, $Arguments, $TimeoutSeconds, $InputText, $Environment)
+    if ($FilePath -eq 'ssh-keygen.exe') { return '256 SHA256:test key' }
+    if ($FilePath -eq 'ssh.exe') {
+        if ($InputText -like 'set -eu*') {
+            Write-Host 'CAMERA_PREFLIGHT'
+            if ($env:DEPLOY_TEST_CASE -eq 'preflight-failed') { throw 'Camera prerequisite check failed' }
+        } elseif ($InputText -like "sh '*install.sh'*") {
+            Write-Host 'CAMERA_INSTALL'
+            if ($env:DEPLOY_TEST_CASE -eq 'install-failed') { throw 'Camera installation failed' }
+        } else { throw 'Unexpected remote command' }
+        return ''
+    }
+    if ($FilePath -eq 'scp.exe') {
+        Write-Host 'CAMERA_UPLOAD'
+        if ($env:DEPLOY_TEST_CASE -eq 'upload-failed') { throw 'Camera upload failed' }
+        $installer = @($Arguments | Where-Object { $_ -like '*install.sh' })[0]
+        Copy-Item -LiteralPath $installer -Destination (Join-Path $env:DEPLOY_TEST_ROOT 'captured-installer.sh')
+        Copy-Item -LiteralPath (Join-Path (Split-Path $installer) 'workercam.env') -Destination (Join-Path $env:DEPLOY_TEST_ROOT 'captured-camera.env')
+        return ''
+    }
+    throw 'Unexpected executable'
+}
+Export-ModuleMember -Function *
+''')
             for folder in ("maix", "pc"):
                 (root / folder).mkdir()
                 for source in (ROOT / folder).iterdir():
@@ -65,25 +94,6 @@ function Get-Date {
 function Invoke-WebRequest {
     if ($env:DEPLOY_TEST_CASE -eq 'http-failed') { throw 'Simulated connection refused' }
     return @{ StatusCode = 200 }
-}
-function plink {
-    $global:LASTEXITCODE = 0
-    if ($args[-1] -like 'set -eu*') {
-        Write-Host 'CAMERA_PREFLIGHT'
-        if ($env:DEPLOY_TEST_CASE -eq 'preflight-failed') { $global:LASTEXITCODE = 1 }
-    } elseif ($args[-1] -like "sh '*install.sh'") {
-        Write-Host 'CAMERA_INSTALL'
-        if ($env:DEPLOY_TEST_CASE -eq 'install-failed') { $global:LASTEXITCODE = 1 }
-    } else { throw 'Unexpected remote command' }
-}
-function pscp {
-    $global:LASTEXITCODE = 0
-    Write-Host 'CAMERA_UPLOAD'
-    if ($env:DEPLOY_TEST_CASE -eq 'upload-failed') { $global:LASTEXITCODE = 1 }
-    $installer = @($args | Where-Object { $_ -like '*install.sh' })[0]
-    Copy-Item -LiteralPath $installer -Destination (Join-Path $env:DEPLOY_TEST_ROOT 'captured-installer.sh')
-    $stage = Split-Path -Parent $installer
-    Copy-Item -LiteralPath (Join-Path $stage 'workercam.env') -Destination (Join-Path $env:DEPLOY_TEST_ROOT 'captured-camera.env')
 }
 try {
     & (Join-Path $env:DEPLOY_TEST_ROOT '__SCRIPT__') __ARGS__

@@ -6,25 +6,28 @@ param(
     [ValidatePattern('^\d{1,3}(\.\d{1,3}){3}$')][string]$PcIp,
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')][string]$HeadsetMac,
-    [Parameter(Mandatory = $true)][string]$HostKey,
+    [string]$HostKey,
     [string]$KeyPath,
     [Security.SecureString]$Password,
     [ValidateSet('a2dp', 'sco')][string]$AudioProfile = 'sco',
-    [switch]$Reboot
+    [switch]$Reboot,
+    [ValidatePattern('^[a-f0-9]{32}$')][string]$DeploymentId = [Guid]::NewGuid().ToString('N')
 )
 
 $ErrorActionPreference = 'Stop'
 $parsedIp = $null
 if (-not [Net.IPAddress]::TryParse($PcIp, [ref]$parsedIp)) { throw 'PcIp must be the PC LAN IPv4 address.' }
 if ($KeyPath -and $Password) { throw 'Use either -KeyPath or -Password.' }
-foreach ($command in @('plink', 'pscp')) {
+Import-Module (Join-Path $PSScriptRoot 'scripts/NetworkDeployment.psm1') -Force -DisableNameChecking
+foreach ($command in @('ssh.exe', 'scp.exe')) {
     if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
-        throw "Install PuTTY and add its folder to PATH; $command is required for camera deployment."
+        throw "Install the Windows OpenSSH Client optional feature; $command is required for camera deployment."
     }
 }
 if ($KeyPath -and -not (Test-Path -LiteralPath $KeyPath -PathType Leaf)) { throw 'SSH key file was not found.' }
 $files = @{
     'maix/rtsp_av.py' = 'rtsp_av.py'
+    'maix/video_rtsp.py' = 'video_rtsp.py'
     'maix/bluetooth_audio.py' = 'bluetooth_audio.py'
     'maix/bluetooth_control.py' = 'bluetooth_control.py'
     'maix/headset_mic_stream.py' = 'headset_mic_stream.py'
@@ -48,27 +51,23 @@ if (-not (Test-Path -LiteralPath $tokenPath -PathType Leaf)) {
 if ((Get-Content -LiteralPath $tokenPath -Raw).Trim() -notmatch '^[0-9a-fA-F]{32}$') {
     throw '.talkback_token must contain 32 hexadecimal characters.'
 }
-$deploymentId = [Guid]::NewGuid().ToString('N')
 $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $stagingPath = Join-Path $tempRoot "workercam-$deploymentId"
 $remoteStage = "/root/workercam-deploy-$deploymentId"
-$sshOptions = @('-batch', '-hostkey', $HostKey)
+$sshContext = $null
 $target = "root@$MaixHost"
 New-Item -ItemType Directory -Path $stagingPath | Out-Null
 try {
-    if ($KeyPath) {
-        $sshOptions += @('-i', (Resolve-Path -LiteralPath $KeyPath).Path)
-    } else {
-        if (-not $Password) { $Password = Read-Host "Password for $target" -AsSecureString }
-        $passwordFile = Join-Path $stagingPath 'ssh-password'
-        $passwordPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Password)
-        try {
-            [IO.File]::WriteAllText($passwordFile, [Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPointer))
-        } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPointer) }
-        $sshOptions += @('-pwfile', $passwordFile)
+    $sshContext = New-SshContext -KeyPath $KeyPath -Password $Password
+    if ($HostKey) {
+        # Compatibility for existing callers: also require the supplied fingerprint.
+        $known = Invoke-NetworkProcess ssh-keygen.exe @('-F', $MaixHost)
+        $knownFile = Join-Path $stagingPath 'known-host'
+        [IO.File]::WriteAllText($knownFile, $known)
+        $fingerprints = Invoke-NetworkProcess ssh-keygen.exe @('-lf', $knownFile, '-E', 'sha256')
+        if ($HostKey -notin ($fingerprints -split '\s+')) { throw 'Supplied HostKey does not match OpenSSH known_hosts. Verify the camera host key.' }
     }
-    & plink @sshOptions $target "set -eu; test `"`$(id -u)`" = 0; command -v python3; command -v ffmpeg; command -v bluetoothctl; command -v bluealsa; command -v arecord; command -v aplay; test -f /maixapp/apps/gen_app_info.py; mkdir -m 700 '$remoteStage'"
-    if ($LASTEXITCODE -ne 0) { throw 'Camera prerequisite check failed. Verify SSH details and the prepared MaixCAM firmware.' }
+    Invoke-MaixSsh $sshContext $MaixHost "set -eu; test `"`$(id -u)`" = 0; command -v python3; command -v ffmpeg; command -v bluetoothctl; command -v bluealsa; command -v arecord; command -v aplay; test -f /maixapp/apps/gen_app_info.py; mkdir -m 700 '$remoteStage'" | Write-Host
     foreach ($source in $files.Keys) {
         $destination = Join-Path $stagingPath $files[$source]
         $content = [IO.File]::ReadAllText((Join-Path $PSScriptRoot $source)).Replace("`r`n", "`n")
@@ -76,7 +75,7 @@ try {
     }
     Copy-Item -LiteralPath $tokenPath -Destination (Join-Path $stagingPath '.talkback_token')
     [IO.File]::WriteAllText((Join-Path $stagingPath 'workercam.env'),
-        "PC_IP=$PcIp`nHEADSET_MAC=$($HeadsetMac.ToUpperInvariant())`nAUDIO_PROFILE=$AudioProfile`n")
+        "PC_IP=$PcIp`nHEADSET_MAC=$HeadsetMac`nAUDIO_PROFILE=$AudioProfile`n")
     # All paths in the installer are fixed project paths or a generated hexadecimal id.
     $installer = @'
 #!/bin/sh
@@ -89,7 +88,7 @@ python3 -c 'import ast,pathlib; [ast.parse(p.read_text()) for p in pathlib.Path(
 . ./workercam.env
 if test "$AUDIO_PROFILE" = sco; then command -v hciconfig >/dev/null; fi
 mkdir -m 700 "$backup"
-for name in rtsp_av.py bluetooth_audio.py bluetooth_control.py headset_mic_stream.py talkback_receiver.py talkback_protocol.py rtsp_app.yaml background_services.rc.local workercam.env .talkback_token; do
+for name in rtsp_av.py video_rtsp.py bluetooth_audio.py bluetooth_control.py headset_mic_stream.py talkback_receiver.py talkback_protocol.py rtsp_app.yaml background_services.rc.local workercam.env .talkback_token; do
     if test -f "/root/$name"; then cp -p "/root/$name" "$backup/$name"; fi
 done
 if test -f /etc/rc.local; then cp -p /etc/rc.local "$backup/rc.local"; fi
@@ -97,7 +96,7 @@ if test -d /maixapp/apps/maix_rtsp; then cp -Rp /maixapp/apps/maix_rtsp "$backup
 if test -f /maixapp/auto_start.txt; then cp -p /maixapp/auto_start.txt "$backup/auto_start.txt"; fi
 if test -f /maixapp/apps/app.info; then cp -p /maixapp/apps/app.info "$backup/app.info"; fi
 echo "Camera backup: $backup"
-for name in rtsp_av.py bluetooth_audio.py bluetooth_control.py headset_mic_stream.py talkback_receiver.py talkback_protocol.py rtsp_app.yaml background_services.rc.local workercam.env .talkback_token; do
+for name in rtsp_av.py video_rtsp.py bluetooth_audio.py bluetooth_control.py headset_mic_stream.py talkback_receiver.py talkback_protocol.py rtsp_app.yaml background_services.rc.local workercam.env .talkback_token; do
     cp "$name" "/root/$name"
 done
 chmod 600 /root/.talkback_token /root/workercam.env
@@ -113,14 +112,11 @@ echo 'Camera installation complete. A reboot activates the installed programs.'
 '@
     $installer = $installer.Replace('__STAGE__', $remoteStage).Replace('__ID__', $deploymentId).Replace("`r`n", "`n")
     [IO.File]::WriteAllText((Join-Path $stagingPath 'install.sh'), $installer, (New-Object Text.UTF8Encoding $false))
-    $uploadPaths = @(Get-ChildItem -LiteralPath $stagingPath -File | Where-Object Name -ne 'ssh-password' | Select-Object -ExpandProperty FullName)
-    & pscp @sshOptions @uploadPaths "${target}:$remoteStage/"
-    if ($LASTEXITCODE -ne 0) { throw 'Camera upload failed; installed files have not been replaced.' }
-    & plink @sshOptions $target "sh '$remoteStage/install.sh'"
-    if ($LASTEXITCODE -ne 0) { throw "Camera installation failed. Inspect $remoteStage and the printed backup path before retrying." }
+    $uploadPaths = @(Get-ChildItem -LiteralPath $stagingPath -File | Where-Object Name -ne 'known-host' | Select-Object -ExpandProperty FullName)
+    Invoke-NetworkProcess scp.exe (@('-O') + @($sshContext.Options) + $uploadPaths + @("${target}:$remoteStage/")) -Environment $sshContext.Environment -TimeoutSeconds 120 | Write-Host
+    Invoke-MaixSsh $sshContext $MaixHost "sh '$remoteStage/install.sh'" -TimeoutSeconds 120 | Write-Host
     if ($Reboot) {
-        & plink @sshOptions $target 'nohup sh -c "sleep 2; reboot" >/dev/null 2>&1 </dev/null &'
-        if ($LASTEXITCODE -ne 0) { throw 'Files were installed, but the reboot request failed.' }
+        Invoke-MaixSsh $sshContext $MaixHost 'nohup sh -c "sleep 2; reboot" >/dev/null 2>&1 </dev/null &' | Out-Null
         Write-Host 'Camera reboot requested. Waiting for the video service...'
         Start-Sleep -Seconds 10
         $deadline = (Get-Date).AddSeconds(120)
@@ -140,6 +136,7 @@ echo 'Camera installation complete. A reboot activates the installed programs.'
         Write-Host 'Reboot the camera before using the new files, or rerun with -Reboot when ready.'
     }
 } finally {
+    Close-SshContext $sshContext
     $resolvedStaging = [IO.Path]::GetFullPath($stagingPath)
     if ($resolvedStaging -ne (Join-Path $tempRoot "workercam-$deploymentId")) { throw 'Unexpected temporary cleanup path.' }
     Remove-Item -LiteralPath $resolvedStaging -Recurse -Force

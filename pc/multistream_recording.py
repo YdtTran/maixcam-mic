@@ -12,6 +12,8 @@ import threading
 import time
 from pathlib import Path
 
+from .video_orientation import rotation_options, validate_rotation
+
 LOG = logging.getLogger(__name__)
 RATE = 48000
 FRAME_SECONDS = 0.02
@@ -41,9 +43,10 @@ def video_command(source, transport, epoch, output):
             "-f", "matroska", str(output)]
 
 
-def mux_command(video, worker, operator, output, duration):
+def mux_command(video, worker, operator, output, duration, rotation=0):
+    input_rotation, output_rotation = rotation_options(rotation)
     command = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "warning", "-y",
-               "-copyts", "-i", str(video)]
+               "-copyts", *input_rotation, "-i", str(video)]
     for audio in (worker, operator):
         command += ["-f", "s16le", "-ar", str(RATE), "-ac", "1", "-i", str(audio)]
     # Fixed half-gain per voice bounds the sum even for correlated full-scale
@@ -53,7 +56,8 @@ def mux_command(video, worker, operator, output, duration):
                 "[wm][om]amix=inputs=2:weights='1 1':normalize=1:dropout_transition=0,"
                 "alimiter=limit=0.95:level=0:latency=1[m]",
                 "-map", "0:v:0", "-map", "[m]", "-map", "[w]", "-map", "[o]",
-                "-c:v", "copy", "-c:a", "aac", "-ar", str(RATE), "-b:a", "96k",
+                "-c:v", "copy", "-bsf:v", "h264_metadata=sample_aspect_ratio=1/1",
+                *output_rotation, "-c:a", "aac", "-ar", str(RATE), "-b:a", "96k",
                 "-metadata:s:v:0", "title=MaixCAM video",
                 "-metadata:s:a:0", "title=Mixed conversation",
                 "-metadata:s:a:0", "handler_name=Mixed conversation",
@@ -168,7 +172,8 @@ class MultistreamRecording:
     stdin = None
 
     def __init__(self, output, source, transport="tcp", spawn=subprocess.Popen,
-                 clock=time.monotonic, wallclock=time.time):
+                 clock=time.monotonic, wallclock=time.time, rotation=0):
+        self.rotation = validate_rotation(rotation)
         self.output, self.spawn = Path(output), spawn
         self.clock, self.wallclock = clock, wallclock
         self.started = clock()
@@ -197,7 +202,7 @@ class MultistreamRecording:
                 "epoch": self.epoch, "monotonic_origin": self.started,
                 "sample_rate": RATE, "channels": 1, "format": "s16le",
                 "sources": [audio.source for audio in self.audio],
-                "video_command": self.command}, indent=2))
+                "rotation": self.rotation, "video_command": self.command}, indent=2))
             self.video = spawn(self.command,
                                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                                stderr=self.log, creationflags=FLAGS)
@@ -298,7 +303,8 @@ class MultistreamRecording:
     def _finalize(self):
         duration = self.frames * FRAME_SECONDS
         partial = self.output.with_suffix(".partial.mp4")
-        command = mux_command(self.video_path, self.worker_path, self.operator_path, partial, duration)
+        command = mux_command(self.video_path, self.worker_path, self.operator_path, partial, duration,
+                              self.rotation)
         self.log.write(("\nFinalize command: " + json.dumps(command) + "\n").encode())
         process = self.spawn(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=self.log, creationflags=FLAGS)
@@ -307,7 +313,7 @@ class MultistreamRecording:
         if process.wait() != 0:
             raise RuntimeError("FFmpeg mux/encode failed")
         partial.replace(self.output)
-        metadata = {"duration_seconds": duration, "recording_mode": "multistream",
+        metadata = {"duration_seconds": duration, "recording_mode": "multistream", "rotation": self.rotation,
                     "alignment": "PC arrival clock; physical flash/click validation pending",
                     "epoch": self.epoch, "audio": [dict(a.stats) for a in self.audio],
                     "scheduler_silence_frames": self.skipped_ticks, "error": self.error}

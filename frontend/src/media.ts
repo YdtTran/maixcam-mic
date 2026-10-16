@@ -1,3 +1,41 @@
+// Present decoded frames without the platform's rotated-video overlay path.
+// Canvas dimensions follow source pixels; CSS handles fitting/fullscreen.
+export function paintVideoFrames(video: HTMLVideoElement, canvas: HTMLCanvasElement, rotation = 0) {
+  const context = canvas.getContext("2d", { alpha: false });
+  if (!context) return () => {};
+  let stopped = false;
+  let frame = 0;
+  const draw = () => {
+    if (stopped || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
+    const quarterTurn = rotation % 180 !== 0;
+    const width = quarterTurn ? video.videoHeight : video.videoWidth;
+    const height = quarterTurn ? video.videoWidth : video.videoHeight;
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    context.save();
+    context.translate(width / 2, height / 2);
+    context.rotate(-rotation * Math.PI / 180);
+    context.drawImage(video, -video.videoWidth / 2, -video.videoHeight / 2);
+    context.restore();
+  };
+  const useVideoFrames = typeof video.requestVideoFrameCallback === "function";
+  const next = () => {
+    if (stopped) return;
+    draw();
+    frame = useVideoFrames ? video.requestVideoFrameCallback(next) : requestAnimationFrame(next);
+  };
+  for (const event of ["loadeddata", "seeked", "resize"]) video.addEventListener(event, draw);
+  next();
+  return () => {
+    stopped = true;
+    if (useVideoFrames) video.cancelVideoFrameCallback(frame);
+    else cancelAnimationFrame(frame);
+    for (const event of ["loadeddata", "seeked", "resize"]) video.removeEventListener(event, draw);
+  };
+}
+
 // WHEP playback and WHIP talkback use UDP ICE media; HTTP carries SDP only.
 export async function selectedIceTransport(peer: RTCPeerConnection): Promise<string> {
   const stats = await peer.getStats();

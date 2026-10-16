@@ -122,6 +122,9 @@ class MultistreamTests(unittest.TestCase):
                     manager.start()
             self.assertTrue(manager.status()["recording"])
             manager.stop()
+            self.assertTrue(manager.camera_view()["locked"])
+            with self.assertRaisesRegex(RuntimeError, "Stop recording"):
+                manager.set_camera_view(0)
             with self.assertRaisesRegex(RuntimeError, "already active"):
                 manager.start()
             process.poll.return_value = 1

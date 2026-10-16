@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([switch]$Build, [switch]$CheckOnly)
+param([switch]$Build, [switch]$CheckOnly, [switch]$Recreate)
 
 $ErrorActionPreference = 'Stop'
 Push-Location $PSScriptRoot
@@ -48,6 +48,7 @@ try {
     New-Item -ItemType Directory -Force -Path recordings | Out-Null
     $upOptions = @('up', '-d', '--wait', '--wait-timeout', '120')
     if ($Build) { $upOptions += '--build' }
+    if ($Recreate) { $upOptions += '--force-recreate' }
     & docker @composeOptions @upOptions server
     if ($LASTEXITCODE -ne 0) {
         throw 'Docker deployment failed. Run: docker compose logs --tail 80 server'

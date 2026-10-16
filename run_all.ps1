@@ -14,7 +14,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if ($DeployMaix) {
-    foreach ($parameterName in @('MaixHost', 'PcIp', 'HeadsetMac', 'HostKey')) {
+    foreach ($parameterName in @('MaixHost', 'PcIp', 'HeadsetMac')) {
         if (-not (Get-Variable -Name $parameterName -ValueOnly)) {
             throw "-$parameterName is required with -DeployMaix. See the first-time setup in README.md."
         }

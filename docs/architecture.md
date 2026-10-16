@@ -1,10 +1,9 @@
 # Current architecture, data pipelines and protocols
 
-This describes the supported Docker/SCO configuration inspected on 2026-10-16.
-The user reports that the architecture works well. This document records the
-existing implementation; no application code, settings or running services were
-changed to produce it. Device connectivity and physical audio/video performance
-were not retested during this documentation task.
+This describes the supported Docker/SCO configuration, updated on 2026-10-16
+for camera-side pixel rotation. The original architecture documentation was
+read-only; the later rotation deployment changed the camera video application.
+Physical audio/video latency and synchronization remain unmeasured for this path.
 
 The selected defaults are **RTSP/TCP video-only monitoring, independent worker
 microphone RTP/UDP return, SCO duplex talkback, and multistream MP4 recording**.
@@ -20,7 +19,7 @@ Editable diagram source: [architecture.mmd](architecture.mmd).
 | Component | Responsibility | Implementation |
 | --- | --- | --- |
 | Worker headset | Microphone capture and speaker playback over Bluetooth SCO/eSCO; current setup uses narrowband CVSD, 8 kHz mono PCM at the ALSA boundary | BlueZ and BlueALSA on MaixCAM |
-| Camera video application | Opens a 640×480 camera and binds it to the native Maix RTSP server; supplies hardware H.264 on `/live` | `maix/rtsp_av.py`, `maix/rtsp_app.yaml` |
+| Camera video application | Captures 432×768 NV21, rotates all pixels 90° CCW, hardware encodes 768×432 and serves H.264 on RTSP/TCP `/live` | `maix/rtsp_av.py`, `maix/video_rtsp.py`, `maix/rtsp_app.yaml` |
 | Camera Bluetooth service | Selected-headset connection, BlueALSA routing, SCO preparation/recovery and authenticated control API | `maix/bluetooth_audio.py`, `maix/bluetooth_control.py` |
 | Camera microphone sender | Captures headset PCM and sends G.711 mu-law RTP to the PC | `maix/headset_mic_stream.py` |
 | Camera talkback receiver | Validates TB2 datagrams, reorders bounded audio and plays through ALSA `bt_output` | `maix/talkback_receiver.py`, deployed copy of `pc/talkback_protocol.py` |
@@ -39,7 +38,7 @@ MaixCAM. The browser runs on the Windows PC.
 
 ### 1. Camera to operator video
 
-`Camera → native H.264 RTSP /live → PC FFmpeg → MediaMTX /maix01 → browser`
+`Camera → full-frame CCW rotation → hardware H.264 RTSP/TCP /live → PC FFmpeg → MediaMTX /maix01 → browser`
 
 FFmpeg reads `rtsp://<MAIX_IP>:8554/live` with RTP interleaved over RTSP/TCP,
 maps only video, and copies H.264 without re-encoding. It publishes to local
@@ -154,7 +153,7 @@ On Stop, capture ends and asynchronous FFmpeg finalization produces:
 
 | MP4 stream | Encoding / behavior |
 | --- | --- |
-| Video | Original H.264 copied without re-encoding |
+| Video | Original H.264 dimensions and slice bytes preserved; MP4 display rotation matches the manager's live orientation |
 | Mixed conversation | 48 kHz mono AAC, 96 kbit/s; default audio track |
 | Worker microphone | 48 kHz mono AAC, 96 kbit/s |
 | Operator microphone | 48 kHz mono AAC, 96 kbit/s |
@@ -193,7 +192,9 @@ defaults to SCO. Explicit A2DP fallback pauses capture using a local pause/ack
 handshake while talkback plays. Legacy recording saves video only in the selected
 video monitoring mode. Direct `python app.py` without the deployment environment
 still defaults to UDP/combined media; it does not automatically load `.env`.
-These alternatives are supported code paths, not the selected architecture.
+The rotated camera publisher serves RTSP/TCP only. Use the Docker defaults or
+explicit `--rtsp-transport tcp --stream-mode video`; the older UDP/combined
+defaults require the earlier camera publisher.
 
 Source of truth: [Compose](../compose.yaml), [supervisor](../app.py),
 [MediaMTX configuration](../mediamtx.yml), [camera boot template](../maix/background_services.rc.local),

@@ -1,0 +1,216 @@
+Set-StrictMode -Version Latest
+
+function Invoke-NetworkProcess {
+    [CmdletBinding()]
+    param([string]$FilePath, [string[]]$Arguments, [int]$TimeoutSeconds = 45,
+        [string]$InputText, [hashtable]$Environment = @{})
+    # Windows command-line quoting, also supported by Windows PowerShell 5.1.
+    $quoted = foreach ($argument in $Arguments) {
+        '"' + [regex]::Replace([regex]::Replace($argument, '(\\*)"', '$1$1\"'), '(\\+)$', '$1$1') + '"'
+    }
+    $info = New-Object Diagnostics.ProcessStartInfo
+    $info.FileName = $FilePath
+    $info.Arguments = $quoted -join ' '
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $info.RedirectStandardInput = $true
+    foreach ($key in $Environment.Keys) { $info.EnvironmentVariables[$key] = $Environment[$key] }
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo = $info
+    try {
+        [void]$process.Start()
+        $output = $process.StandardOutput.ReadToEndAsync()
+        $errors = $process.StandardError.ReadToEndAsync()
+        if ($InputText) { $process.StandardInput.Write($InputText.Replace("`r`n", "`n")) }
+        $process.StandardInput.Close()
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            # Kill the command and descendants (including a blocked SSH child).
+            & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null
+            throw "$([IO.Path]::GetFileName($FilePath)) timed out after $TimeoutSeconds seconds."
+        }
+        $result = $output.GetAwaiter().GetResult()
+        $errorText = $errors.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0) {
+            throw "$([IO.Path]::GetFileName($FilePath)) failed ($($process.ExitCode)): $errorText $result"
+        }
+        if ($errorText) { Write-Verbose $errorText.Trim() }
+        return $result.Trim()
+    } finally { $process.Dispose() }
+}
+
+function New-SshContext {
+    param([string]$KeyPath, [Security.SecureString]$Password)
+    $options = @('-o', 'StrictHostKeyChecking=yes', '-o', 'UpdateHostKeys=no', '-o', 'ConnectTimeout=5',
+        '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=3')
+    $environment = @{}
+    $directory = $null
+    if ($KeyPath) {
+        if (-not (Test-Path -LiteralPath $KeyPath -PathType Leaf)) { throw 'SSH key file does not exist.' }
+        $options += @('-i', (Resolve-Path -LiteralPath $KeyPath).Path, '-o', 'IdentitiesOnly=yes')
+    }
+    if ($Password) {
+        # OpenSSH for Windows supports SSH_ASKPASS. Password never enters argv or a script.
+        $directory = Join-Path ([IO.Path]::GetTempPath()) ('workercam-ssh-' + [guid]::NewGuid().ToString('N'))
+        [void](New-Item -ItemType Directory -Path $directory)
+        $credentialPath = Join-Path $directory 'credential.xml'
+        (New-Object Management.Automation.PSCredential('root', $Password)) | Export-Clixml -LiteralPath $credentialPath
+        $helper = @'
+$credential = Import-Clixml -LiteralPath $env:WORKERCAM_SSH_CREDENTIAL
+[Console]::WriteLine($credential.GetNetworkCredential().Password)
+'@
+        [IO.File]::WriteAllText((Join-Path $directory 'askpass.ps1'), $helper)
+        $powershellPath = Join-Path $PSHOME 'powershell.exe'
+        if (-not (Test-Path $powershellPath)) { $powershellPath = Join-Path $PSHOME 'pwsh.exe' }
+        [IO.File]::WriteAllText((Join-Path $directory 'askpass.cmd'),
+            "@echo off`r`n`"$powershellPath`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$directory\askpass.ps1`"`r`n")
+        $environment = @{ SSH_ASKPASS = (Join-Path $directory 'askpass.cmd'); SSH_ASKPASS_REQUIRE = 'force';
+            DISPLAY = 'workercam'; WORKERCAM_SSH_CREDENTIAL = $credentialPath }
+        $options += @('-o', 'BatchMode=no', '-o', 'NumberOfPasswordPrompts=1')
+    } else { $options += @('-o', 'BatchMode=yes') }
+    return @{ Options = $options; Environment = $environment; Directory = $directory }
+}
+
+function Close-SshContext {
+    param($Context)
+    if ($Context -and $Context.Directory) {
+        $path = [IO.Path]::GetFullPath($Context.Directory)
+        $temp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+        if (-not $path.StartsWith($temp, [StringComparison]::OrdinalIgnoreCase) -or
+            [IO.Path]::GetFileName($path) -notmatch '^workercam-ssh-[a-f0-9]{32}$') { throw 'Invalid SSH temporary path.' }
+        Remove-Item -LiteralPath $path -Recurse -Force
+    }
+}
+
+function Invoke-MaixSsh {
+    param($Context, [string]$Address, [string]$Command, [int]$TimeoutSeconds = 45)
+    Invoke-NetworkProcess ssh.exe (@($Context.Options) + @('-T', "root@$Address", 'sh -s')) `
+        -InputText ($Command + "`n") -Environment $Context.Environment -TimeoutSeconds $TimeoutSeconds
+}
+
+function Read-EnvText {
+    param([string]$Text)
+    $values = @{}
+    foreach ($line in ($Text -split '\r?\n')) {
+        if ($line -match '^\s*([A-Z][A-Z0-9_]*)\s*=\s*(.*?)\s*$') {
+            if ($values.ContainsKey($Matches[1])) { throw "Duplicate configuration key: $($Matches[1])" }
+            $values[$Matches[1]] = $Matches[2].Trim('"', "'")
+        }
+    }
+    return $values
+}
+
+function Update-EnvText {
+    param([string]$Text, [hashtable]$Values)
+    $existing = Read-EnvText $Text
+    $newline = "`n"
+    if ($Text.Contains("`r`n")) { $newline = "`r`n" }
+    foreach ($key in ($Values.Keys | Sort-Object)) {
+        if ($existing.ContainsKey($key) -and $existing[$key] -ceq $Values[$key]) { continue }
+        $pattern = '(?m)^[ \t]*' + [regex]::Escape($key) + '[ \t]*=[^\r\n]*'
+        $line = "$key=$($Values[$key])"
+        if ([regex]::IsMatch($Text, $pattern)) { $Text = [regex]::Replace($Text, $pattern, $line) }
+        else { $Text = $Text.TrimEnd("`r", "`n") + $newline + $line + $newline }
+    }
+    return $Text
+}
+
+function Test-IPv4 {
+    param([string]$Address)
+    $ip = $null
+    return ($Address -match '^\d{1,3}(\.\d{1,3}){3}$' -and
+        [Net.IPAddress]::TryParse($Address, [ref]$ip) -and
+        $ip.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork -and
+        $ip.GetAddressBytes()[0] -gt 0 -and $ip.GetAddressBytes()[0] -lt 224 -and
+        $ip.GetAddressBytes()[0] -ne 127 -and $Address -notlike '169.254.*')
+}
+
+function ConvertTo-IPv4Number {
+    param([string]$Address)
+    $bytes = [Net.IPAddress]::Parse($Address).GetAddressBytes()
+    return [uint64]$bytes[0] * 16777216 + [uint64]$bytes[1] * 65536 + [uint64]$bytes[2] * 256 + $bytes[3]
+}
+
+function Test-SameSubnet {
+    param([string]$First, [string]$Second, [int]$PrefixLength)
+    $size = [math]::Pow(2, 32 - $PrefixLength)
+    return [math]::Floor((ConvertTo-IPv4Number $First) / $size) -eq [math]::Floor((ConvertTo-IPv4Number $Second) / $size)
+}
+
+function Get-DeploymentInterfaces {
+    $addresses = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop)
+    foreach ($adapter in @(Get-NetAdapter -ErrorAction Stop)) {
+        if ($adapter.Status -ne 'Up' -or -not $adapter.HardwareInterface) { continue }
+        $description = "$($adapter.Name) $($adapter.InterfaceDescription)"
+        if ($description -match 'Docker|WSL|Hyper-V|VPN|Virtual|VMware|Tailscale|Loopback|Bluetooth') { continue }
+        $kind = $null
+        if ("$($adapter.PhysicalMediaType)" -match '802\.11|Wireless' -or $description -match 'Wi-Fi|Wireless|802\.11') { $kind = 'Wifi' }
+        elseif ($description -match 'RNDIS|Remote NDIS|NCM|Sipeed|USB.*(Ethernet|Network|LAN)') { $kind = 'Usb' }
+        if (-not $kind) { continue }
+        foreach ($ip in $addresses | Where-Object InterfaceIndex -eq $adapter.ifIndex) {
+            if (-not (Test-IPv4 $ip.IPAddress) -or $ip.AddressState -ne 'Preferred' -or $ip.SkipAsSource) { continue }
+            [pscustomobject]@{ Kind = $kind; Index = [int]$adapter.ifIndex; Name = $adapter.Name;
+                Address = $ip.IPAddress; PrefixLength = [int]$ip.PrefixLength }
+        }
+    }
+}
+
+function Get-UsbPeers {
+    param($Interface, [string]$Hint)
+    $candidates = @()
+    if ($Hint) { $candidates += $Hint }
+    $candidates += @(Get-NetNeighbor -InterfaceIndex $Interface.Index -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object State -in @('Reachable', 'Stale', 'Delay', 'Probe') | Select-Object -ExpandProperty IPAddress)
+    $candidates += @(Get-NetRoute -InterfaceIndex $Interface.Index -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty NextHop)
+    $size = [math]::Pow(2, 32 - $Interface.PrefixLength)
+    $base = [uint64]([math]::Floor((ConvertTo-IPv4Number $Interface.Address) / $size) * $size)
+    # Only bounded subnet discovery. Wider subnets require neighbors or -UsbPeerIP.
+    if ($size -le 1024) {
+        foreach ($offset in 1..([int]$size - 2)) {
+            $number = $base + $offset
+            $candidates += '{0}.{1}.{2}.{3}' -f (($number -shr 24) -band 255), (($number -shr 16) -band 255), (($number -shr 8) -band 255), ($number -band 255)
+        }
+    }
+    @($candidates | Select-Object -Unique | Where-Object {
+        (Test-IPv4 $_) -and $_ -ne $Interface.Address -and
+        (Test-SameSubnet $_ $Interface.Address $Interface.PrefixLength) -and
+        (ConvertTo-IPv4Number $_) -gt $base -and (ConvertTo-IPv4Number $_) -lt ($base + $size - 1)
+    })
+}
+
+function Find-OpenSshPeers {
+    param([string[]]$Addresses, [string]$LocalAddress)
+    # Probe in parallel batches; bind to the USB interface, never a VPN route.
+    for ($offset = 0; $offset -lt $Addresses.Count; $offset += 32) {
+        $pending = @()
+        try {
+            foreach ($address in $Addresses[$offset..([math]::Min($offset + 31, $Addresses.Count - 1))]) {
+                $client = New-Object Net.Sockets.TcpClient
+                $client.Client.Bind((New-Object Net.IPEndPoint([Net.IPAddress]::Parse($LocalAddress), 0)))
+                $pending += @{ Client = $client; Task = $client.ConnectAsync($address, 22); Address = $address }
+            }
+            $deadline = [datetime]::UtcNow.AddMilliseconds(600)
+            while ([datetime]::UtcNow -lt $deadline -and @($pending | Where-Object { -not $_.Task.IsCompleted }).Count) {
+                Start-Sleep -Milliseconds 20
+            }
+            foreach ($item in $pending) { if ($item.Client.Connected) { $item.Address } }
+        } finally { foreach ($item in $pending) { $item.Client.Dispose() } }
+    }
+}
+
+function Select-LaptopWifi {
+    param([array]$Interfaces, [string]$CameraAddress, [int]$InterfaceIndex)
+    $route = @(Find-NetRoute -RemoteIPAddress $CameraAddress -ErrorAction Stop)
+    $candidates = @($Interfaces | Where-Object { $_.Kind -eq 'Wifi' -and
+        (-not $InterfaceIndex -or $_.Index -eq $InterfaceIndex) })
+    $routeAddresses = @($route | Where-Object { $_.PSObject.Properties['IPAddress'] } | Select-Object -ExpandProperty IPAddress)
+    $selected = @($candidates | Where-Object { $_.Index -in $route.InterfaceIndex -and $_.Address -in $routeAddresses })
+    if ($selected.Count -ne 1) {
+        throw "Cannot select a Wi-Fi route to $CameraAddress. Candidates: $($candidates | ConvertTo-Json -Compress). Use -WifiInterfaceIndex; correct VPN/Windows routes if needed."
+    }
+    return $selected[0]
+}
+
+Export-ModuleMember -Function *

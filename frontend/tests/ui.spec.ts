@@ -1,8 +1,10 @@
 import { test, expect, type Page } from "@playwright/test";
+import { demoVideo } from "../src/demo";
 
 async function setup(page: Page, fixed = false) {
   let recording = false;
   let saved = false;
+  let rotation = 0;
   const requests: string[] = [];
   await page.addInitScript(() => {
     class Peer {
@@ -54,15 +56,19 @@ async function setup(page: Page, fixed = false) {
     requests.push(path);
     let payload: unknown = {};
     if (path === "/api/recordings/status")
-      payload = { recording, duration_seconds: 0 };
+      payload = { recording, duration_seconds: 0, rotation };
+    if (path === "/api/camera/view") {
+      if (route.request().method() === "POST") rotation = route.request().postDataJSON().rotation;
+      payload = { rotation, locked: recording };
+    }
     if (path === "/api/recordings/start") {
       recording = true;
-      payload = { recording: true };
+      payload = { recording: true, rotation };
     }
     if (path === "/api/recordings/stop") {
       recording = false;
       saved = true;
-      payload = { recording: false };
+      payload = { recording: false, rotation };
     }
     if (path === "/api/recordings")
       payload = saved
@@ -104,6 +110,194 @@ async function login(page: Page) {
     page.getByRole("heading", { name: "Live Workers" }),
   ).toBeVisible();
 }
+
+test("manager rotation persists, preserves full player bounds, and locks while recording", async ({ page }) => {
+  await setup(page);
+  await login(page);
+  const control = page.getByLabel("Camera rotation", { exact: true });
+  const video = page.locator(".video-body video");
+  await expect(control).toBeEnabled();
+  await expect(control).toHaveValue("0");
+  await expect(control.locator("option:checked")).toHaveText("Original (0°)");
+  await expect(video).toHaveCSS("object-fit", "contain");
+  for (const viewport of [{ width: 1366, height: 768 }, { width: 1920, height: 1080 }]) {
+    await page.setViewportSize(viewport);
+    for (const rotation of [270, 0, 90, 180]) {
+      await control.selectOption(String(rotation));
+      await expect(video).toHaveAttribute("data-rotation", String(rotation));
+      await expect.poll(async () => video.evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        const body = element.parentElement!.getBoundingClientRect();
+        return Math.max(Math.abs(bounds.width - body.width), Math.abs(bounds.height - body.height),
+                        Math.abs(bounds.x - body.x), Math.abs(bounds.y - body.y));
+      })).toBeLessThan(1);
+    }
+  }
+  await control.selectOption("90");
+  await expect(video).toHaveCSS("transform", /matrix\(0, -1, 1, 0,/);
+  await page.getByRole("button", { name: "Fullscreen video" }).click();
+  await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement))).toBe(true);
+  await expect.poll(async () => video.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return Math.abs(bounds.height - element.parentElement!.clientHeight);
+  })).toBeLessThan(1);
+  await page.evaluate(() => document.exitFullscreen());
+  await page.reload();
+  await expect(control).toHaveValue("90");
+  await expect(control).toBeEnabled();
+  await page.getByRole("button", { name: "Record", exact: true }).click();
+  await expect(control).toBeDisabled();
+  await page.getByRole("button", { name: "Stop Recording", exact: true }).click();
+  await expect(control).toBeEnabled();
+  await page.getByLabel("Select worker").selectOption("cam-012");
+  await expect(control).toHaveCount(0);
+  await expect(video).toHaveAttribute("data-rotation", "0");
+  await expect(video).toHaveCSS("transform", /matrix\(1, 0, 0, 1,/);
+});
+
+test("a delayed status poll cannot undo a newer rotation", async ({ page }) => {
+  await setup(page);
+  await page.clock.install();
+  await login(page);
+  const control = page.getByLabel("Camera rotation", { exact: true });
+  const video = page.locator(".video-body video");
+  await expect(control).toBeEnabled();
+  let release!: () => void;
+  const delayed = new Promise<void>((resolve) => { release = resolve; });
+  let waiting = false;
+  await page.route("**/api/bluetooth/status", async (route) => {
+    waiting = true;
+    await delayed;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ connected: false }) });
+  });
+  await page.clock.fastForward(10000);
+  await expect.poll(() => waiting).toBe(true);
+  for (const angle of [90, 0, 270, 90]) {
+    await control.selectOption(String(angle));
+    await expect(video).toHaveAttribute("data-rotation", String(angle));
+    await expect(control).toBeEnabled();
+  }
+  const completed = page.waitForResponse("**/api/bluetooth/status");
+  release();
+  await completed;
+  // Let the completed refresh update the UI before checking the saved angle.
+  await expect(page.getByText("Disconnected", { exact: true })).toBeVisible();
+  await expect(control).toHaveValue("90");
+  await expect(video).toHaveAttribute("data-rotation", "90");
+});
+
+test("quarter-turn pictures retain decoded pixels after recording and page navigation", async ({ page }) => {
+  await page.addInitScript(() => {
+    const play = HTMLMediaElement.prototype.play;
+    HTMLMediaElement.prototype.play = function () {
+      // The mocked WHEP peer has no tracks; the test supplies real canvas frames.
+      if (this.srcObject instanceof MediaStream && !this.srcObject.getTracks().length)
+        return Promise.resolve();
+      return play.call(this);
+    };
+  });
+  await setup(page);
+  await login(page);
+  const control = page.getByLabel("Camera rotation", { exact: true });
+  const picture = page.locator(".video-body canvas");
+  const feed = () => page.locator(".video-body video").evaluate(async (video: HTMLVideoElement) => {
+    const source = document.createElement("canvas");
+    source.width = 80; source.height = 40;
+    const context = source.getContext("2d")!;
+    const draw = () => {
+      context.fillStyle = source.dataset.flip ? "blue" : "red"; context.fillRect(0, 0, 40, 40);
+      context.fillStyle = source.dataset.flip ? "red" : "blue"; context.fillRect(40, 0, 40, 40);
+    };
+    draw();
+    const stream = source.captureStream(10);
+    const timer = setInterval(draw, 100);
+    stream.getVideoTracks()[0].addEventListener("ended", () => clearInterval(timer));
+    video.srcObject = stream;
+    (video as HTMLVideoElement & { testSource: HTMLCanvasElement }).testSource = source;
+    await video.play();
+  });
+  const colors = () => picture.evaluate((canvas: HTMLCanvasElement) => {
+    const context = canvas.getContext("2d")!;
+    const top = context.getImageData(10, 10, 1, 1).data;
+    const bottom = context.getImageData(10, 60, 1, 1).data;
+    return [top[2] > 200 && top[0] < 40, bottom[0] > 200 && bottom[2] < 40];
+  });
+  await expect(control).toBeEnabled();
+  await feed();
+  await control.selectOption("90");
+  await expect(picture).toBeVisible();
+  await expect.poll(colors).toEqual([true, true]);
+  const flip = (value: string) => page.locator(".video-body video").evaluate((video, value) => {
+    (video as HTMLVideoElement & { testSource: HTMLCanvasElement }).testSource.dataset.flip = value;
+  }, value);
+  await flip("yes");
+  await expect.poll(colors).toEqual([false, false]);
+  await flip("");
+  await expect.poll(colors).toEqual([true, true]);
+  await page.getByRole("button", { name: "Record", exact: true }).click();
+  await page.getByRole("button", { name: "Stop Recording", exact: true }).click();
+  await expect.poll(colors).toEqual([true, true]);
+  for (let visit = 0; visit < 2; visit++) {
+    await page.getByRole("button", { name: "Recordings", exact: true }).click();
+    await page.getByRole("button", { name: "Live Workers", exact: true }).click();
+    await feed();
+    await expect.poll(colors).toEqual([true, true]);
+  }
+  await control.selectOption("270");
+  await expect.poll(colors).toEqual([false, false]);
+  await control.selectOption("180");
+  await expect(picture).toHaveCount(0);
+  await expect(page.locator(".video-body video")).toHaveCSS("opacity", "1");
+});
+
+test("portrait playback draws frames and supports pause, seek, volume and fullscreen", async ({ page }) => {
+  await setup(page);
+  await login(page);
+  // Reuse the checked-in synthetic MP4 with the same quarter-turn display
+  // matrix as camera recordings, including its finite seekable timeline.
+  const clip = Buffer.from(demoVideo.split(",")[1], "base64");
+  const track = clip.indexOf(Buffer.from("tkhd")) - 4;
+  expect(track).toBeGreaterThan(0);
+  expect(clip[track + 8]).toBe(0);
+  [0, -65536, 0, 65536, 0, 0, 0, 0, 1073741824].forEach((value, index) => {
+    clip.writeInt32BE(value, track + 48 + index * 4);
+  });
+  await page.route("**/api/recordings/*/file", (route) => {
+    const range = route.request().headers()["range"];
+    const match = range?.match(/bytes=(\d+)-(\d*)/);
+    const start = match ? Number(match[1]) : 0;
+    const end = match?.[2] ? Number(match[2]) : clip.length - 1;
+    return route.fulfill({
+      status: match ? 206 : 200, contentType: "video/mp4",
+      headers: { "Accept-Ranges": "bytes", ...(match ? { "Content-Range": `bytes ${start}-${end}/${clip.length}` } : {}) },
+      body: clip.subarray(start, end + 1),
+    });
+  });
+  await page.getByRole("button", { name: "Record", exact: true }).click();
+  await page.getByRole("button", { name: "Stop Recording", exact: true }).click();
+  await page.getByRole("button", { name: "Recordings", exact: true }).click();
+  await page.getByRole("button", { name: "Play", exact: true }).click();
+  const picture = page.locator("dialog canvas");
+  await expect(picture).toBeVisible();
+  await expect.poll(() => picture.evaluate((canvas: HTMLCanvasElement) => canvas.width)).toBe(600);
+  await page.getByRole("button", { name: "Pause recording", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Play recording", exact: true })).toBeVisible();
+  await page.getByLabel("Recording position", { exact: true }).fill("0.3");
+  await expect.poll(() => page.locator("dialog video").evaluate((v: HTMLVideoElement) => v.currentTime)).toBeCloseTo(0.3, 1);
+  await expect.poll(() => picture.evaluate((canvas: HTMLCanvasElement) => {
+    const pixels = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height).data;
+    let sum = 0;
+    for (let i = 0; i < pixels.length; i += 4) sum += pixels[i] + pixels[i + 1] + pixels[i + 2];
+    return sum / (canvas.width * canvas.height * 3) > 10;
+  })).toBe(true);
+  await page.getByLabel("Recording volume", { exact: true }).fill("0.4");
+  await expect.poll(() => page.locator("dialog video").evaluate((v: HTMLVideoElement) => v.volume)).toBeCloseTo(0.4);
+  await page.getByRole("button", { name: "Fullscreen recording", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement?.className)).toBe("recording-player");
+  await page.evaluate(() => document.exitFullscreen());
+  await page.getByRole("button", { name: "Play recording", exact: true }).click();
+  await expect.poll(() => page.locator("dialog video").evaluate((v: HTMLVideoElement) => v.currentTime)).toBeGreaterThan(0.4);
+});
 
 test("microphone loss and reconnect leave video connected; audio is enabled by interaction", async ({ page }) => {
   await setup(page);
@@ -247,15 +441,15 @@ test("multistream finalization protects recording and reports saved after comple
   let recording = false;
   let finalizing = false;
   await page.route("**/api/recordings/status", (route) => route.fulfill({
-    contentType: "application/json", body: JSON.stringify({ recording, finalizing, duration_seconds: 1 }),
+    contentType: "application/json", body: JSON.stringify({ recording, finalizing, duration_seconds: 1, rotation: 270 }),
   }));
   await page.route("**/api/recordings/start", (route) => {
     recording = true;
-    return route.fulfill({ contentType: "application/json", body: JSON.stringify({ recording }) });
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify({ recording, rotation: 270 }) });
   });
   await page.route("**/api/recordings/stop", (route) => {
     finalizing = true;
-    return route.fulfill({ contentType: "application/json", body: JSON.stringify({ recording, finalizing }) });
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify({ recording, finalizing, rotation: 270 }) });
   });
   await login(page);
   await page.getByRole("button", { name: "Record", exact: true }).click();

@@ -5,6 +5,61 @@ to detailed evidence; session logs preserve the history. Last updated: 2026-10-1
 
 ## Current State and User Decisions
 
+- **Automatic Windows network deployment (2026-10-16):** User requests USB-first
+  address discovery and one-command full redeployment using Windows OpenSSH only.
+  Added `scripts/deploy.ps1`, a shared PowerShell helper and deployment guide.
+  Central runtime `.env` retains camera aliases and records both devices' Wi-Fi
+  and USB addresses, camera Wi-Fi MAC and exact fixed earbuds binding. Reuses
+  camera staged install/reboot and Docker PC deployment; supports dry run,
+  force, interface selection, backups/rollback and actual media health checks.
+  Exact one-command live run completed successfully: Docker healthy, camera
+  settings/processes and both video/headset streams verified; 21 focused tests
+  passed. Includes one recording-safe PC stop/start for missing headset return
+  after container recreation. Existing pairing token and headset binding kept.
+  A second exact run verified idempotence: no install/build/reboot, both media
+  streams and application checks passed again.
+  See [session evidence](docs/sessions/2026-10-16-automatic-network-deployment.md)
+  and [usage/recovery](scripts/README.md) for verification and runtime state.
+
+- **Canvas presentation for quarter turns (2026-10-16):** User confirms both
+  live 90-degree video and `20261016T044816Z_74cc3723.mp4` are black in their
+  Edge session; filter workaround failed again after entering Recordings.
+  Live 90/270 and portrait playback now paint decoded frames on canvas; source
+  streams, copied MP4s and camera unchanged. Added portrait playback controls.
+  30 browser checks passed; actual Edge playback of exact file, successful new
+  90-degree capture and three return-to-live cycles showed clear canvas pixels.
+  A three-second diagnostic recording failed with empty staging; retained.
+  User initially still reported black. On continuation, inspected their actual
+  Edge window: old page lacked canvas; hard refresh loaded the current player.
+  Exact recording and return to 90-degree live visibly worked in that same
+  window. PC Docker healthy, idle, rotation 90. No file-specific fix or mutation.
+  See [canvas session](docs/sessions/2026-10-16-canvas-video-rendering.md).
+
+- **Quarter-turn black-screen investigation (2026-10-16):** User reports Edge
+  recording playback and video after recording fail at 90 degrees, while 0/180
+  work; hard refresh does not help. Latest 90-degree file decodes clear frames
+  and plays in isolated Edge/Chromium sessions. A real 90-degree recording cycle,
+  playback and return to live also passed. No cause proven or source changes made;
+  User identified `20261016T044816Z_74cc3723.mp4`. Deployed a small frontend
+  compositing workaround for quarter-turn live video and recording playback;
+  recordings/camera unchanged. All 26 browser checks and actual Edge repeated
+  rotations/exact-file playback passed; user's affected session acceptance
+  pending. Docker healthy, idle; last observed selection 0.
+  See [investigation](docs/sessions/2026-10-16-quarter-turn-black-screen.md).
+
+- **Rotation jump-back repair (2026-10-16):** User reports repeated rotations
+  eventually jump back. Reproduced an older status poll overwriting a newly
+  saved angle while waiting for Bluetooth. Frontend now ignores camera status
+  from polls spanning a rotation update. Regression and full source/compiled
+  browser suite passed (26 checks). PC Docker rebuilt healthy; camera unchanged.
+  See [repair log](docs/sessions/2026-10-16-rotation-jump-back.md).
+
+- **Original16:9 and reversed rotation (2026-10-16):** User requested0°=768×432 and inversion of90°. Camera now captures432×768 and physically rotates the complete imageCCW to768×432; encoder width is aligned without padding/SPS changes. Manager numeric90 now meansCCW (CSS negative angle, matching MP4 rotation), displaying432×768. Camera video alone restarted; PC Docker rebuilt healthy. Actual UI recordings and Chromium playback verified at0° and90°; final selection0°, no active recording/error.10 targeted checks/one skip,24 browser checks and Docker media checks passed. See [16:9 rotation session](docs/sessions/2026-10-16-16x9-rotation.md). Supersedes earlier resolution/angle convention below.
+
+- **Camera-side pixel rotation (2026-10-16):** User explicitly requires MaixCAM to rotate pixels 90° CCW while preserving the original 640×480 capture area. Final camera code rotates full NV21 planes before hardware encoding, pads encoder input for alignment, and excludes only padding through SPS bounds; decoded RTSP/TCP output is480×640. Manager Original now adds0°; PC recordings copy this source without square resizing. Camera and PC deployed; clear live and exact-file recording playback verified. Short samples12–13fps; physical latency/long stability untested. Headset return unavailable after restart; no audible acceptance. See [camera rotation log](docs/sessions/2026-10-16-camera-pixel-rotation.md). Supersedes browser-only baseline below.
+
+- **Manager rotation and recording aspect (2026-10-16):** User requested counter-clockwise live video, manual manager rotation and recordings preserving the original image. Added shared/persistent quarter-turn controls (counter-clockwise default), full-frame contain rendering, and MP4 rotation preserving 640×480 H.264 without video re-encoding. Rotation locks through capture/finalization. PC Docker rebuilt healthy; real Chromium verified live rotation and a new MP4 displayed 480×640. Further manager rotation selections were observed and preserved. 126 Python checks/five skips and 24 browser checks passed; real FFmpeg rotation checks passed on Windows and Debian. See [rotation session](docs/sessions/2026-10-16-manager-rotation-recording.md).
+
 - **Restored commit redeployed (2026-10-16):** User requested latest-commit restore and redeployment of both devices. Camera installed/rebooted and Docker rebuilt healthy from  `6e55f38`. Clear 640×480 landscape video visually verified in Chromium. SCO connected at MTU120; PC stop/start restored initially missing G711 return. Talkback available; audible acceptance untested. See [deployment log](docs/sessions/2026-10-16-restored-commit-redeployment.md).
 
 - **Architecture reference and safe local cleanup (2026-10-16):** User reports
@@ -345,9 +400,13 @@ Run these from the repository root:
 - `./stop_docker_pc.ps1`: stop only this project's container after recording and
   finalization complete; retains saved recordings.
 - `./deploy_maix.ps1 -MaixHost <address> -PcIp <PC-LAN-IP> -HeadsetMac <MAC>
-  -HostKey <verified-key> -Reboot`: install camera programs with backups, then
-  activate by reboot. Requires a prepared camera and PuTTY. Default SCO;
+  -Reboot`: install camera programs with backups, then activate by reboot.
+  Requires a prepared camera, Windows OpenSSH, verified known_hosts and key or
+  SecureString password. Default SCO;
   A2DP fallback requires explicit `-AudioProfile a2dp`.
+- `./scripts/deploy.ps1`: discover USB/Wi-Fi addresses, preserve fixed earbuds,
+  update ignored `.env`, redeploy both devices and verify media. Supports
+  `-DryRun`, `-Force`, `-Verbose` and explicit interface selection.
 - `docker compose config --quiet`: validate the single Compose configuration.
 - `docker compose logs --tail 80 server`: inspect PC service logs.
 - `python -m unittest discover -s tests -v`: run developer Python checks. Local

@@ -40,6 +40,24 @@ All audio is 48 kHz, 96 kbit/s per track. Both `title` and `handler_name` are se
 only the mixed audio track has the default disposition. In VLC select tracks
 through Audio → Audio Track. Browsers generally play only the default track.
 
+The manager's **Camera rotation** choice is shared and persisted in
+`recordings/.camera-view.json`. MaixCAM captures a 432×768 image,
+rotates all pixels 90° counter-clockwise and encodes a visible 768×432 stream.
+**Original (0°)** displays that stream directly; manual rotation labels and
+stored/API counter-clockwise angles are relative to this camera output. This
+direction convention reverses the earlier manager rotation configuration. Both live
+and recorded playback show the entire image with `contain`. Recording locks
+rotation until capture and finalization finish. Both recorder modes retain
+the camera's visible 768×432 dimensions and H.264 slice bytes; MP4 display
+rotation carries the selected orientation without resizing or encoding video.
+An additional 90° manual rotation displays 432×768. H.264 sample aspect is explicitly 1:1
+for this camera. Existing recordings are unaffected; players ignoring MP4
+rotation show the original orientation. FFmpeg 5 uses the output `rotate`
+metadata tag; newer FFmpeg uses the input `-display_rotation` option with
+automatic pixel rotation disabled. See the official
+[FFmpeg display rotation documentation](https://ffmpeg.org/ffmpeg.html) and
+[H.264 metadata filter documentation](https://ffmpeg.org/ffmpeg-bitstream-filters.html#h264_005fmetadata).
+
 An FFmpeg input pointed at an absent RTSP path exits at input opening. Optional
 `-map 0:a?` does not make the input optional or add it dynamically later. An
 isolated MediaMTX test confirms this behavior. Each audio reader therefore

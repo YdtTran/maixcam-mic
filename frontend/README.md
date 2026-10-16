@@ -67,6 +67,15 @@ mocks unavailable camera APIs and uses Worker #12's demo. No device is contacted
   Microphone and IndexedDB require a supported browser. Use localhost or HTTPS
   for microphone access. A remote HTTPS deployment also needs HTTPS WHEP/API.
 
+Quarter-turn live views (90/270 degrees) and portrait recording playback draw
+decoded video frames on a canvas to avoid rotated native-video display failures
+reported in Edge. `paintVideoFrames` in `src/media.ts` draws at source resolution
+on video-frame callbacks, redraws after seeking and cancels callbacks on unmount.
+CSS fits the complete picture. The underlying video retains decoding/audio;
+portrait playback provides play/pause, seek, volume and fullscreen controls.
+Landscape playback uses native controls. This changes presentation only: WHEP,
+camera encoding and saved MP4 rotation metadata are unchanged.
+
 ## Existing API integration
 
 | Feature | Existing endpoint |

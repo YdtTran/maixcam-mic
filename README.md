@@ -17,6 +17,7 @@ They illustrate the controls; they are not photographs from a connected camera.*
 | Feature | How it works |
 | --- | --- |
 | Live view | Select **Worker #07** to watch the connected MaixCAM. |
+| Rotate | **Original (0°)** is 768×432 (16:9). MaixCAM rotates its full 432×768 capture counter-clockwise before encoding. Manual **90° counter-clockwise** displays 432×768; **90° clockwise** turns the opposite way. Finish recording before changing rotation. |
 | Listen | Click **Enable audio** to hear the worker's headset microphone. |
 | Talk | Hold **Talk**, speak into your PC microphone, then release. |
 | Record | Click **Record**, then **Stop Recording** when finished. |
@@ -80,19 +81,19 @@ video with mixed audio and separate worker/operator audio tracks. Select `legacy
 **Skip this step if your installer has already configured this camera for this PC
 and supplied its matching `.talkback_token` file.**
 
-For a new camera, the installer needs PuTTY (`plink` and `pscp` on PATH), the
-camera's SSH address and verified host-key fingerprint, the PC's LAN address,
+For a new camera, the installer needs Windows OpenSSH Client (`ssh.exe` and `scp.exe` on PATH), the
+camera's SSH address and verified OpenSSH known_hosts entry, the PC's LAN address,
 and the headset's Bluetooth address. MaixCAM must already have MaixPy, BlueZ,
 BlueALSA, FFmpeg and ALSA tools installed. This script does not flash firmware.
 
-Example — replace all addresses and the fingerprint with your installation's values:
+Example — replace the addresses and headset binding with your installation's values:
 
 ```powershell
-.\deploy_maix.ps1 -MaixHost 10.172.16.1 -PcIp 192.168.1.4 -HeadsetMac 'AA:BB:CC:DD:EE:FF' -HostKey 'SHA256:YOUR_VERIFIED_FINGERPRINT' -AudioProfile sco -Reboot
+.\deploy_maix.ps1 -MaixHost 10.172.16.1 -PcIp 192.168.1.4 -HeadsetMac 'AA:BB:CC:DD:EE:FF' -Password (Read-Host 'Camera password' -AsSecureString) -AudioProfile sco -Reboot
 ```
 
-The password is requested privately. SSH key users can add `-KeyPath` with their
-PuTTY private-key file. `MaixHost` may be a USB address; `.env` should contain the
+The example requests the password privately. SSH key users can omit `-Password`
+and add `-KeyPath` with their OpenSSH private-key file. `MaixHost` may be a USB address; `.env` should contain the
 camera address reachable from Docker, usually its Wi-Fi/LAN address.
 
 The script checks prerequisites, backs up camera files and startup settings,
@@ -161,6 +162,13 @@ stay on disk. Switch off the camera separately when the work session is over.
 Real recordings are stored in **`recordings/`** inside the project folder.
 You can also play or download them from the **Recordings** page.
 
+New recordings retain the camera's 768×432 stream, full frame and aspect
+ratio. The MP4 stores any additional manual live rotation, so playback uses the
+same orientation. Video is copied on the PC without re-encoding,
+square cropping or stretching. Use a player that supports MP4 display rotation;
+the browser player does. Existing recordings are unchanged. The rotation choice
+is shared between managers and saved in `recordings/.camera-view.json`.
+
 | Setting in `.env` | Saved MP4 |
 | --- | --- |
 | `RECORDING_MODE=multistream` — default | Camera video, a mixed audio track, and separate worker/operator audio tracks. |
@@ -178,23 +186,29 @@ long-session drift and VLC track selection still need hardware acceptance tests.
 See the [recording guide](docs/multistream-recording.md) before relying on it for
 evidence or synchronized analysis.
 
-## The four scripts
+## Deployment scripts
 
 ### When the network changes
 
-Changing Wi-Fi can give both devices new addresses. Update `MAIX_IP` in `.env`
-to the camera's new address. The installer must also update the camera's
-microphone destination by running `deploy_maix.ps1` with the PC's new LAN address
-as `-PcIp`. A USB `-MaixHost` can still be used for installation when Wi-Fi access
-is unavailable. Finish recordings before reinstalling/rebooting the camera.
+Connect MaixCAM by USB with both devices on Wi-Fi, then run:
 
-Reserve both addresses in the router to reduce repeated setup. The browser URL
-on the PC remains **http://127.0.0.1:8000**.
+```powershell
+.\scripts\deploy.ps1
+```
+
+This discovers and verifies both network paths, preserves the camera's fixed
+earbuds MAC, updates `.env`, installs/reboots the camera using Windows OpenSSH,
+and rebuilds the Docker PC service. Unchanged deployments are verified and
+skipped; use `-Force` to reinstall and rebuild, or `-DryRun` to preview.
+See [automatic deployment](scripts/README.md) for credentials, requirements,
+interface selection, health checks and recovery. The browser remains at
+**http://127.0.0.1:8000**.
 
 ### Script reference
 
 | File | Purpose |
 | --- | --- |
+| [`scripts/deploy.ps1`](scripts/deploy.ps1) | Discover USB/Wi-Fi addresses, preserve the headset binding, update configuration and redeploy both devices. |
 | [`deploy_maix.ps1`](deploy_maix.ps1) | Install camera programs and startup settings, with backups. Use `-AudioProfile sco -Reboot` for the standard pipeline. |
 | [`deploy_pc.ps1`](deploy_pc.ps1) | Start or update the PC Docker service and check access. Add `-Build` after a software update. |
 | [`stop_docker_pc.ps1`](stop_docker_pc.ps1) | Safely stop this project's PC container, keeping recordings. |
@@ -209,12 +223,12 @@ This also upgrades installations that still explicitly select `legacy`.
 With Docker Desktop running, an installer can update both devices in one command:
 
 ```powershell
-.\run_all.ps1 -DeployMaix -Build -MaixHost 10.172.16.1 -PcIp 192.168.1.4 -HeadsetMac 'AA:BB:CC:DD:EE:FF' -HostKey 'SHA256:YOUR_VERIFIED_FINGERPRINT' -AudioProfile sco
+.\run_all.ps1 -DeployMaix -Build -MaixHost 10.172.16.1 -PcIp 192.168.1.4 -HeadsetMac 'AA:BB:CC:DD:EE:FF' -Password (Read-Host 'Camera password' -AsSecureString) -AudioProfile sco
 ```
 
 This command checks that recording is idle, installs and reboots the camera
 with SCO duplex, then rebuilds the PC Docker service with multistream recording.
-Replace the addresses, headset binding and verified fingerprint with your own;
+Replace the addresses and headset binding with your own; verify the SSH host key;
 keep the matching `.talkback_token`. After deployment, confirm the live picture,
 worker microphone return and Talk audio. With `RECORDING_MODE=multistream`,
 a saved MP4 contains video and mixed/worker/operator audio tracks.

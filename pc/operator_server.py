@@ -16,6 +16,7 @@ from uuid import uuid4
 from .talkback import MAX_POST_BYTES, TalkbackRelay
 from .camera_diagnostics import CameraDiagnostics, DEFAULT_USB_IP, ipv4
 from .multistream_recording import MultistreamRecording
+from .video_orientation import rotation_options, validate_rotation
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -46,6 +47,28 @@ class RecordingManager:
         self._recording_id = None
         self._started = None
         self._log = None
+        self._rotation = 0
+        self._view_path = self.directory / ".camera-view.json"
+        if self._view_path.is_file():
+            self._rotation = validate_rotation(json.loads(self._view_path.read_text())["rotation"])
+
+    def camera_view(self):
+        with self._lock:
+            self._refresh()
+            return {"rotation": self._rotation, "locked": self._process is not None}
+
+    def set_camera_view(self, rotation):
+        validate_rotation(rotation)
+        with self._lock:
+            self._refresh()
+            if self._process is not None:
+                raise RuntimeError("Stop recording and wait for finalization before rotating the camera")
+            self.directory.mkdir(parents=True, exist_ok=True)
+            temporary = self._view_path.with_suffix(".tmp")
+            temporary.write_text(json.dumps({"rotation": rotation}))
+            temporary.replace(self._view_path)
+            self._rotation = rotation
+            return self.camera_view()
 
     def _refresh(self):
         if self._process is not None and self._process.poll() is not None:
@@ -78,6 +101,7 @@ class RecordingManager:
             return {
                 **details,
                 "recording": self._process is not None,
+                "rotation": self._rotation,
                 "id": self._recording_id,
                 "duration_seconds": details.get("duration_seconds", round(time.monotonic() - self._started)
                                                 if self._started else 0),
@@ -95,7 +119,8 @@ class RecordingManager:
             output = self.recording_path(recording_id)
             self._last_recording_status = {}
             if self.recording_mode == "multistream":
-                self._process = MultistreamRecording(output, self.source, self.transport, self.spawn)
+                self._process = MultistreamRecording(output, self.source, self.transport, self.spawn,
+                                                    rotation=self._rotation)
                 self._recording_id = recording_id
                 self._started = self._process.started
                 return self.status()
@@ -103,10 +128,14 @@ class RecordingManager:
             command = [
                 "ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostats",
                 "-rtsp_transport", self.transport, "-analyzeduration", "10000000",
-                "-probesize", "20000000", "-i", self.source,
+                "-probesize", "20000000",
             ]
+            input_rotation, output_rotation = rotation_options(self._rotation) if self.mode != "audio" else ([], [])
+            command += [*input_rotation, "-i", self.source]
             if self.mode != "audio":
-                command += ["-map", "0:v:0", "-c:v", "copy", "-bsf:v", "filter_units=remove_types=0"]
+                command += ["-map", "0:v:0", "-c:v", "copy", "-bsf:v",
+                            "filter_units=remove_types=0,h264_metadata=sample_aspect_ratio=1/1",
+                            *output_rotation]
             if self.mode != "video":
                 command += ["-map", "0:a:0", "-c:a", "aac", "-b:a", "128k"]
             command += ["-movflags", "+faststart", "-f", "mp4", str(output)]
@@ -145,7 +174,8 @@ class RecordingManager:
             finally:
                 self._close_process()
             if output.is_file() and output.stat().st_size:
-                output.with_suffix(".json").write_text(json.dumps({"duration_seconds": duration}))
+                output.with_suffix(".json").write_text(json.dumps({"duration_seconds": duration,
+                                                                  "rotation": self._rotation}))
             return self.status()
 
     def wait(self):
@@ -245,6 +275,8 @@ def make_handler(manager, html_path=APP_DIR / "operator_test.html", talkback=Non
                 return self._file(Path(html_path), "text/html; charset=utf-8")
             if route == "/api/recordings/status":
                 return self._json(200, manager.status())
+            if route == "/api/camera/view":
+                return self._json(200, manager.camera_view())
             if route == "/api/recordings":
                 return self._json(200, manager.list_recordings())
             if route == "/api/talkback/status":
@@ -271,6 +303,21 @@ def make_handler(manager, html_path=APP_DIR / "operator_test.html", talkback=Non
             origin = self.headers.get("Origin")
             if origin and origin != "http://" + self.headers.get("Host", ""):
                 return self._json(403, {"error": "cross-origin control is blocked"})
+            if route == "/api/camera/view":
+                try:
+                    size = int(self.headers.get("Content-Length", "0"))
+                    if size <= 0 or size > 128:
+                        raise ValueError("invalid camera view request size")
+                    payload = json.loads(self.rfile.read(size))
+                    if not isinstance(payload, dict) or set(payload) != {"rotation"}:
+                        raise ValueError("request must contain only rotation")
+                    return self._json(200, manager.set_camera_view(payload["rotation"]))
+                except (ValueError, UnicodeError) as error:
+                    return self._json(400, {"error": str(error)})
+                except RuntimeError as error:
+                    return self._json(409, {"error": str(error)})
+                except OSError as error:
+                    return self._json(503, {"error": str(error)})
             if route == "/api/talkback/offer":
                 if talkback is None:
                     return self._json(503, {"error": "talkback is not configured"})

@@ -153,7 +153,7 @@ export async function api<T>(
     throw new Error(payload.error || `Request failed (${response.status}).`);
   return payload as T;
 }
-export type RealStatus = { recording: boolean; duration_seconds: number; finalizing?: boolean; error?: string | null };
+export type RealStatus = { recording: boolean; duration_seconds: number; finalizing?: boolean; error?: string | null; rotation: number };
 export type BluetoothStatus = { connected: boolean; selected: string | null; fixed?: boolean };
 export type BluetoothDevice = { mac: string; name: string };
 export async function listRecordings(): Promise<Recording[]> {

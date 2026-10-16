@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Users,
@@ -15,6 +15,7 @@ import {
   Circle,
   VideoOff,
   Play,
+  Pause,
   Download,
   X,
   LogOut,
@@ -37,7 +38,7 @@ import {
   type Recording,
   type Worker,
 } from "./data";
-import { LiveStream, Talkback } from "./media";
+import { LiveStream, Talkback, paintVideoFrames } from "./media";
 import "./style.css";
 
 type Page = "Live Workers" | "Recordings" | "Settings";
@@ -64,6 +65,10 @@ function App() {
   const [stoppingTalk, setStoppingTalk] = useState(false);
   const [recordStatusKnown, setRecordStatusKnown] = useState(false);
   const [recordFinalizing, setRecordFinalizing] = useState(false);
+  const [rotation, setRotation] = useState(0);
+  const [rotationKnown, setRotationKnown] = useState(false);
+  const rotationRevision = useRef(0);
+  const [playerSize, setPlayerSize] = useState({ width: 0, height: 0 });
   const wasFinalizing = useRef(false);
   const [headset, setHeadset] = useState<BluetoothStatus | null>(null);
   const [talkAvailable, setTalkAvailable] = useState(false);
@@ -105,6 +110,7 @@ function App() {
   }, [notice]);
 
   async function refresh() {
+    const revision = rotationRevision.current;
     const local = await repository.list<Recording>("recordings");
     try {
       const remote = await listRecordings();
@@ -125,22 +131,28 @@ function App() {
       api<BluetoothStatus>("/api/bluetooth/status"),
       api<{ available: boolean }>("/api/talkback/status"),
     ]);
+    // A poll may wait on Bluetooth after it has read the old camera angle.
+    // Do not let it overwrite a rotation saved while that poll was pending.
     const status = results[0];
-    setRecordStatusKnown(status.status === "fulfilled");
-    if (status.status === "fulfilled") {
-      setRecordFinalizing(Boolean(status.value.finalizing));
-      if (status.value.error) setNotice(status.value.error);
-      else if (wasFinalizing.current && !status.value.recording) setNotice("MaixCAM recording saved.");
-      wasFinalizing.current = Boolean(status.value.finalizing);
+    if (revision === rotationRevision.current) {
+      setRecordStatusKnown(status.status === "fulfilled");
+      setRotationKnown(status.status === "fulfilled" && [0, 90, 180, 270].includes(status.value.rotation));
+      if (status.status === "fulfilled") {
+        if ([0, 90, 180, 270].includes(status.value.rotation)) setRotation(status.value.rotation);
+        setRecordFinalizing(Boolean(status.value.finalizing));
+        if (status.value.error) setNotice(status.value.error);
+        else if (wasFinalizing.current && !status.value.recording) setNotice("MaixCAM recording saved.");
+        wasFinalizing.current = Boolean(status.value.finalizing);
+      }
+      if (status.status === "fulfilled")
+        setWorkers((items) =>
+          items.map((item) =>
+            item.mode === "real"
+              ? { ...item, recording: status.value.recording }
+              : item,
+          ),
+        );
     }
-    if (status.status === "fulfilled")
-      setWorkers((items) =>
-        items.map((item) =>
-          item.mode === "real"
-            ? { ...item, recording: status.value.recording }
-            : item,
-        ),
-      );
     setHeadset(results[1].status === "fulfilled" ? results[1].value : null);
     setTalkAvailable(
       results[2].status === "fulfilled" && results[2].value.available,
@@ -154,6 +166,33 @@ function App() {
     }, 10000);
     return () => clearInterval(timer);
   }, [signedIn, workers.length]);
+
+  useEffect(() => {
+    const body = videoCard.current?.querySelector(".video-body");
+    if (!body) return;
+    const observer = new ResizeObserver(([entry]) => {
+      setPlayerSize({ width: entry.contentRect.width, height: entry.contentRect.height });
+    });
+    observer.observe(body);
+    return () => observer.disconnect();
+  }, [signedIn, page, worker?.id]);
+
+  async function rotateCamera(value: number) {
+    if (busy) return;
+    rotationRevision.current++;
+    setBusy(true);
+    try {
+      const view = await api<{ rotation: number }>("/api/camera/view", "POST", { rotation: value });
+      setRotation(view.rotation);
+      setNotice("Camera rotation saved. New recordings will use this orientation.");
+    } catch (error) {
+      setNotice(message(error));
+      await refresh();
+    } finally {
+      rotationRevision.current++;
+      setBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!signedIn || !worker || page !== "Live Workers" || !video.current)
@@ -241,6 +280,7 @@ function App() {
           `/api/recordings/${worker.recording ? "stop" : "start"}`,
           "POST",
         );
+        setRotation(result.rotation);
         setWorkers((items) =>
           items.map((item) =>
             item.id === worker.id
@@ -477,6 +517,13 @@ function App() {
                       <video
                         key={`${worker.id}-${retry}`}
                         ref={video}
+                        className={real && rotation % 180 ? "canvas-source" : undefined}
+                        data-rotation={real ? rotation : 0}
+                        style={real ? {
+                          width: rotation % 180 ? playerSize.height : "100%",
+                          height: rotation % 180 ? playerSize.width : "100%",
+                          transform: `translate(-50%, -50%) rotate(${-rotation}deg)`,
+                        } : undefined}
                         src={real ? undefined : preferences.demoVideo}
                         autoPlay
                         playsInline
@@ -486,6 +533,8 @@ function App() {
                           if (!real) setStreamState("Demo video unavailable");
                         }}
                       />
+                      {real && rotation % 180 !== 0 && <VideoPicture
+                        key={`picture-${worker.id}-${retry}`} source={video} rotation={rotation} />}
                       {real && <audio ref={returnAudio} autoPlay muted={muted} />}
                       {!online || streamState === "Demo video unavailable" ? (
                         <div className="video-empty">
@@ -549,6 +598,18 @@ function App() {
                     <button className="text-button" onClick={() => setMicRetry((value) => value + 1)}>
                       <RefreshCw size={16} /> Reconnect microphone
                     </button>
+                  </div>}
+                  {real && <div className="video-caption camera-rotation">
+                    <label htmlFor="camera-rotation">Camera rotation</label>
+                    <select id="camera-rotation" value={rotation}
+                      disabled={busy || !rotationKnown || !recordStatusKnown || worker.recording || recordFinalizing}
+                      onChange={(event) => void rotateCamera(Number(event.target.value))}>
+                      <option value={0}>Original (0°)</option>
+                      <option value={90}>90° counter-clockwise</option>
+                      <option value={180}>180°</option>
+                      <option value={270}>90° clockwise</option>
+                    </select>
+                    {(worker.recording || recordFinalizing) && <span>Stop recording to rotate</span>}
                   </div>}
                 </section>
                 <aside className="status-column">
@@ -660,7 +721,7 @@ function App() {
                           (real && recordFinalizing) ||
                           busy ||
                           (real &&
-                            (!recordStatusKnown ||
+                            (!recordStatusKnown || !rotationKnown ||
                               (!online && !worker.recording)))
                         }
                         onClick={() => void toggleRecording()}
@@ -918,6 +979,18 @@ function Login({ onLogin }: { onLogin: () => void }) {
     </main>
   );
 }
+function VideoPicture({ source, rotation = 0 }: {
+  source: RefObject<HTMLVideoElement | null>;
+  rotation?: number;
+}) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    if (source.current && canvas.current)
+      return paintVideoFrames(source.current, canvas.current, rotation);
+  }, [source, rotation]);
+  return <canvas ref={canvas} className="video-picture" aria-label="Video picture" role="img" />;
+}
+
 function Playback({
   recording,
   onClose,
@@ -926,6 +999,15 @@ function Playback({
   onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const player = useRef<HTMLDivElement>(null);
+  const video = useRef<HTMLVideoElement>(null);
+  const [portrait, setPortrait] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [position, setPosition] = useState(0);
+  const [length, setLength] = useState(recording.duration);
+  const [volume, setVolume] = useState(1);
+  const [muted, setMuted] = useState(false);
+  const [error, setError] = useState("");
   useEffect(() => {
     dialog.current?.showModal();
   }, []);
@@ -954,7 +1036,58 @@ function Playback({
           <X />
         </button>
       </div>
-      <video src={recording.url} controls autoPlay playsInline />
+      <div className="recording-player" ref={player}>
+        <div className="playback-picture">
+          <video ref={video} src={recording.url} controls={!portrait} autoPlay playsInline
+            className={portrait ? "canvas-source" : undefined}
+            onLoadedMetadata={(event) => {
+              const media = event.currentTarget;
+              setPortrait(media.videoHeight > media.videoWidth);
+              if (Number.isFinite(media.duration)) setLength(media.duration);
+            }}
+            onPlay={() => setPaused(false)} onPause={() => setPaused(true)}
+            onEnded={() => setPaused(true)}
+            onTimeUpdate={(event) => setPosition(event.currentTarget.currentTime)}
+            onVolumeChange={(event) => {
+              setVolume(event.currentTarget.volume);
+              setMuted(event.currentTarget.muted);
+            }}
+            onError={() => setError("This recording could not be played.")} />
+          {portrait && <VideoPicture source={video} />}
+        </div>
+        {portrait && <div className="recording-controls">
+          <button aria-label={paused ? "Play recording" : "Pause recording"}
+            onClick={() => {
+              const media = video.current;
+              if (!media) return;
+              if (media.paused) void media.play().catch((error) => setError(message(error)));
+              else media.pause();
+            }}>{paused ? <Play size={19} /> : <Pause size={19} />}</button>
+          <span>{duration(position)} / {duration(length)}</span>
+          <input aria-label="Recording position" type="range" min={0} max={length || 1}
+            step={0.01} value={position} onInput={(event) => {
+              const next = Number(event.currentTarget.value);
+              setPosition(next);
+              if (video.current) video.current.currentTime = next;
+            }} />
+          <button aria-label={muted ? "Unmute recording" : "Mute recording"}
+            onClick={() => { if (video.current) video.current.muted = !video.current.muted; }}>
+            {muted || !volume ? <VolumeX size={19} /> : <Volume2 size={19} />}
+          </button>
+          <input aria-label="Recording volume" type="range" min={0} max={1} step={0.05}
+            value={muted ? 0 : volume} onInput={(event) => {
+              if (video.current) {
+                video.current.volume = Number(event.currentTarget.value);
+                video.current.muted = false;
+              }
+            }} />
+          <button aria-label="Fullscreen recording" onClick={() => {
+            const action = document.fullscreenElement ? document.exitFullscreen() : player.current?.requestFullscreen();
+            void action?.catch((error) => setError(message(error)));
+          }}><Maximize size={19} /></button>
+        </div>}
+      </div>
+      {error && <p className="modal-note" role="alert">{error}</p>}
       <p className="modal-note">
         {recording.source === "demo"
           ? "Demo records replay the demonstration clip."
