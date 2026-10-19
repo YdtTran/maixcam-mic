@@ -48,16 +48,91 @@ your installer first, including Wi-Fi, USB networking and headset setup.
 
 ## 2. Prepare Windows and open PowerShell
 
-### Install the two required tools
+### Before the first setup — install Docker Desktop
 
-1. Install [Docker Desktop for Windows](https://docs.docker.com/desktop/setup/install/windows-install/).
-   Follow its setup prompts and restart Windows if asked. Open Docker Desktop
-   and wait until its engine is running. Use **Linux containers**.
-2. In Windows Settings, search for **Optional features**. Find **OpenSSH Client**
-   in the installed features. If missing, use **Add a feature** or **View features**
-   to install it. You need the Client, not the Server.
+Complete this once on each Windows PC. If Docker already works, skip to
+**Install OpenSSH Client** below. WorkerCam uses Linux containers through WSL 2.
 
-Windows may ask for administrator approval during installation. Ordinary
+#### 1. Check Windows and virtualization
+
+Check your Windows version with `winver` and compare it with the current
+[Docker Desktop requirements](https://docs.docker.com/desktop/setup/install/windows-install/#system-requirements).
+Open **Task Manager → Performance → CPU** and check **Virtualization**.
+If disabled, enable hardware virtualization in BIOS/UEFI; ask your installer
+or IT team if needed.
+
+#### 2. Install or update WSL 2
+
+WSL lets Docker run Linux containers on Windows. Open Start, search for
+**PowerShell**, right-click it and select **Run as administrator**.
+Check whether WSL is installed:
+
+```powershell
+wsl --version
+```
+
+If WSL is missing, install it without adding a separate Linux distribution:
+
+```powershell
+wsl --install --no-distribution
+```
+
+Restart Windows if prompted. Reopen PowerShell as administrator, then run:
+
+```powershell
+wsl --update
+wsl --set-default-version 2
+wsl --version
+```
+
+If WSL was already installed, run these update and verification commands too.
+If installation fails, follow Microsoft's
+[WSL installation guide](https://learn.microsoft.com/en-us/windows/wsl/install).
+Finish any requested restart before continuing.
+
+#### 3. Install and start Docker Desktop
+
+1. Download the installer matching your PC's processor from
+   [Docker Desktop for Windows](https://docs.docker.com/desktop/setup/install/windows-install/).
+2. Run it. Select **Use WSL 2 instead of Hyper-V** if offered.
+3. Finish installation and restart if requested.
+4. Open **Docker Desktop** from Start, review and accept its terms to continue,
+   and wait for the engine to start.
+5. In **Settings → General**, enable **Use the WSL 2 based engine** if available.
+   Apply changes if needed. Use **Linux containers**.
+
+#### 4. Verify Docker before deploying
+
+Open a new, normal PowerShell window and run:
+
+```powershell
+docker --version
+docker compose version
+docker info --format '{{.OSType}}'
+docker run --rm hello-world
+```
+
+The first two commands should print versions, the third should print `linux`,
+and the last should print **Hello from Docker!**. The test downloads a small
+image, so internet access is required. Keep Docker Desktop running.
+
+If a check fails:
+
+- **Command not recognized:** reopen PowerShell after installation.
+- **Cannot connect to Docker:** open Docker Desktop and wait for startup.
+- **Output is `windows`:** choose **Switch to Linux containers** from Docker's
+  system tray menu, if available, then retry.
+- **WSL update or virtualization error:** repeat the WSL checks and confirm
+  virtualization is enabled, then restart Windows.
+- **Image download fails:** check internet, proxy or VPN settings and retry.
+
+### Install OpenSSH Client
+
+In Windows Settings, search for **Optional features**. Find **OpenSSH Client**
+in the installed features. If missing, use **Add a feature** or **View features**
+to install it. You need the Client, not the Server.
+
+Windows may ask for administrator approval during preparation. Ordinary
 WorkerCam deployment runs in a normal PowerShell window. You do not need Python,
 Node.js or separate video tools.
 
