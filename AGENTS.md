@@ -1,9 +1,17 @@
 # Project Brain and Index
 
 Read this file first when resuming work. It records current decisions and points
-to detailed evidence; session logs preserve the history. Last updated: 2026-10-16.
+to detailed evidence; session logs preserve the history. Last updated: 2026-10-17.
 
 ## Current State and User Decisions
+
+- **Nontechnical Windows README (2026-10-17):** User requested self-service
+  redeployment instructions with PowerShell bypass included. Root README now
+  leads with USB-first automatic deployment, explains laptop/password setup,
+  preserves camera pairing and recordings, and provides picture/audio checks
+  and recovery. All script examples use per-run `-ExecutionPolicy Bypass`.
+  Local links and PowerShell example syntax checked; no live services changed.
+  See [documentation session](docs/sessions/2026-10-17-nontechnical-windows-readme.md).
 
 - **Visible PC deployment progress (2026-10-16):** User reports another laptop
   blocked at `deploy_pc.ps1`; exact remote error/output still pending. Confirmed
