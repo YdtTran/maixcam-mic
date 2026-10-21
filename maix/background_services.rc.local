@@ -4,6 +4,9 @@
 export HOME=/root
 . /root/workercam.env || exit 1
 : "${PC_IP:?Missing PC_IP}" "${HEADSET_MAC:?Missing HEADSET_MAC}"
+# Console filtering does not disable kernel log collection by syslog daemons.
+dmesg -n 4 2>/dev/null || { echo 4 >/proc/sys/kernel/printk; } 2>/dev/null || true
+iw dev wlan0 set power_save off 2>/dev/null || iwconfig wlan0 power off 2>/dev/null || true
 case "${AUDIO_PROFILE:-sco}" in
     a2dp) bluetooth_options=''; talkback_options='' ;;
     sco)

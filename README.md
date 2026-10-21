@@ -33,11 +33,18 @@ finds addresses; it does not connect the camera to a new Wi-Fi network.
 **Finalizing...** disappears. Keep USB connected throughout setup.
 
 **Keep your existing files.** When replacing project files with an update,
-retain `.env`, `.talkback_token`, `.runtime`, and `recordings` in the project
-folder. These hold settings, camera pairing, recovery information and videos.
+retain `.env`, `.runtime`, and `recordings` in the project
+folder. These hold settings, private recovery information and videos.
 
-**Moving to another laptop?** Bring the matching `.talkback_token` from the old
-installation with the project. Set up the camera password again in step 3;
+**One-time paired update:** this release uses TB3 talkback. Run the combined
+`scripts/deploy.ps1` workflow to update PC and camera together. An older release
+on either side cannot provide talkback with TB3. Recovery snapshots retain any
+usable legacy token privately; missing legacy material does not block the new
+release, but may prevent complete old-release talkback recovery. Active legacy
+token files are removed only after both new sides and media pass verification.
+
+**Moving to another laptop?** No application token needs copying. Set up the
+camera password again in step 3;
 the saved password file from another laptop cannot be reused. Stop WorkerCam on
 the old PC before redeploying. The camera sends its microphone sound to one PC,
 so redeployment switches that destination to the new laptop.
@@ -312,7 +319,7 @@ about 691 MB per hour. See [recording details](docs/multistream-recording.md).
 | Wi-Fi checks fail | Confirm the camera and PC are on the same Wi-Fi and can communicate. Guest Wi-Fi or a VPN may prevent this; ask your installer or network administrator. |
 | A port is already in use | Close the previous WorkerCam installation on this PC. Ask your installer to stop any older background service. |
 | Deployment seems stuck | Builds can take several minutes. Look for new Docker output. If it fails or stops progressing, collect the details below. |
-| Updating or stopping is refused | Stop recording in the browser and wait for finalization. Retry when it finishes. |
+| Updating or stopping is refused | Stop recording in the browser and wait for finalization. If the UI reports maintenance, wait for that operation or follow [owner-specific recovery](scripts/README.md#recording-safe-maintenance-and-crash-recovery). |
 | Page is blank or video is black | Check camera power, select Worker #07 and press **Ctrl+F5** to reload. Try **Settings → Diagnose camera**. |
 | No worker sound | Click **Enable audio**, check PC volume and power on the earbuds outside their case. Try the restart below. |
 | Worker cannot hear you | Allow browser microphone access, check the selected PC microphone and hold **Talk** while speaking. If unavailable, ask the installer to check the camera pairing file. |
@@ -342,8 +349,7 @@ docker compose logs --tail 80 server
 ```
 
 Send the output and describe whether picture, listening or talking failed.
-Include any printed backup path. Keep passwords and the contents of
-`.talkback_token` private.
+Include any printed backup path. Keep passwords and private recovery snapshots out of shared diagnostics.
 
 ## Technical help for installers
 

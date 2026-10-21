@@ -15,7 +15,7 @@ export type Recording = {
   id: string;
   worker: string;
   createdAt: string;
-  duration: number;
+  duration: number | null;
   filename: string;
   url: string;
   active?: boolean;
@@ -153,7 +153,7 @@ export async function api<T>(
     throw new Error(payload.error || `Request failed (${response.status}).`);
   return payload as T;
 }
-export type RealStatus = { recording: boolean; duration_seconds: number; finalizing?: boolean; error?: string | null; rotation: number };
+export type RealStatus = { recording: boolean; duration_seconds: number; finalizing?: boolean; error?: string | null; metadata_warnings?: string[]; maintenance?: { owner: string | null; error?: string } | null; rotation: number; effective_rotation?: number };
 export type BluetoothStatus = { connected: boolean; selected: string | null; fixed?: boolean };
 export type BluetoothDevice = { mac: string; name: string };
 export async function listRecordings(): Promise<Recording[]> {
@@ -162,7 +162,7 @@ export async function listRecordings(): Promise<Recording[]> {
       {
         id: string;
         created_at: string;
-        duration_seconds: number;
+        duration_seconds: number | null;
         url: string;
         active: boolean;
       }[]
@@ -178,8 +178,8 @@ export async function listRecordings(): Promise<Recording[]> {
     source: "real",
   }));
 }
-export const duration = (seconds: number) =>
-  `${Math.floor(seconds / 60)
+export const duration = (seconds: number | null) =>
+  seconds === null ? "Unknown" : `${Math.floor(seconds / 60)
     .toString()
     .padStart(2, "0")}:${Math.floor(seconds % 60)
     .toString()

@@ -16,24 +16,48 @@ from pc.operator_server import main as operator_main
 
 
 class BluetoothControlTests(unittest.TestCase):
-    def test_standalone_operator_wires_camera_clock_to_talkback(self):
-        with tempfile.TemporaryDirectory() as directory:
-            token = Path(directory) / "token"
-            token.write_text("61" * 16)
-            server = Mock()
-            server.serve_forever.side_effect = KeyboardInterrupt
-            with patch("sys.argv", ["operator", "--talkback-host", "192.0.2.1",
-                                    "--talkback-token", str(token), "--recordings", directory]), \
-                    patch("pc.bluetooth_client.CameraBluetoothClient") as client, \
-                    patch("pc.operator_server.TalkbackRelay") as relay, \
-                    patch("pc.operator_server.ThreadingHTTPServer", return_value=server):
-                operator_main()
-                self.assertIs(relay.call_args.kwargs["clock_sync"], client.return_value.talkback_clock)
-            server.server_close.assert_called_once()
+    def test_pc_entry_points_ignore_legacy_token_files(self):
+        import app
+        from tests.test_app import fake_media_executable
+        for content in (None, "invalid", "62" * 16):
+            with self.subTest(content=content), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                if content is not None:
+                    (root / ".talkback_token").write_text(content)
+                server = Mock()
+                server.serve_forever.side_effect = KeyboardInterrupt
+                with patch("sys.argv", ["operator", "--talkback-host", "192.0.2.1", "--recordings", directory]), \
+                        patch("pc.operator_server.PROJECT_ROOT", root), \
+                        patch("pc.bluetooth_client.CameraBluetoothClient") as client, \
+                        patch("pc.operator_server.TalkbackRelay") as relay, \
+                        patch("pc.operator_server.ThreadingHTTPServer", return_value=server):
+                    operator_main()
+                    client.assert_called_once_with("192.0.2.1")
+                    self.assertIs(relay.call_args.kwargs["clock_sync"], client.return_value.talkback_clock)
+                server.handle_request.side_effect = KeyboardInterrupt
+                child = Mock()
+                child.poll.return_value = None
+                (root / "mediamtx.yml").write_text("# fixture")
+                with fake_media_executable(), patch("app.ROOT", root), \
+                        patch("app.shutil.which", return_value="ffmpeg"), \
+                        patch("app.CameraBluetoothClient") as client, patch("app.TalkbackRelay") as relay:
+                    app.run(app.parse_args(["--recordings", directory]), spawn=Mock(return_value=child),
+                            server_factory=lambda *a, **k: server, wait_for_relay=lambda p: None,
+                            wait_for_audio=lambda p: None, stop_existing=lambda: None)
+                    self.assertIs(relay.call_args.kwargs["clock_sync"], client.return_value.talkback_clock)
+
+    def test_removed_token_flags_are_unknown(self):
+        import app
+        with self.assertRaises(SystemExit):
+            app.parse_args(["--talkback-token", "unused"])
+        client = CameraBluetoothClient("127.0.0.1", open_url=Mock(side_effect=OSError("offline")))
+        self.assertEqual(client.request("status")[0], 503)
+        with self.assertRaises(ValueError):
+            client.request("unsupported")
 
     def test_talkback_clock_tracks_camera_time_despite_pc_clock_jumps(self):
-        client = CameraBluetoothClient("127.0.0.1", "secret")
-        client.request = Mock(return_value=(200, {"time_ms": 1000000}))
+        client = CameraBluetoothClient("127.0.0.1")
+        client.request = Mock(return_value=(200, {"time_ms": 1000000, "talkback_protocol": "TB3"}))
         with patch("pc.bluetooth_client.time.monotonic", side_effect=[10, 10.02, 10.11]), \
                 patch("pc.bluetooth_client.time.time", return_value=0):
             clock = client.talkback_clock()
@@ -41,20 +65,22 @@ class BluetoothControlTests(unittest.TestCase):
         client.request.assert_called_once_with("clock")
 
     def test_talkback_clock_rejects_failed_slow_or_invalid_calibration(self):
-        client = CameraBluetoothClient("127.0.0.1", "secret")
+        client = CameraBluetoothClient("127.0.0.1")
         for response, elapsed in (((403, {"error": "unauthorized"}), .02),
-                                  ((200, {"time_ms": "1000"}), .02),
-                                  ((200, {"time_ms": 1000}), 1.1)):
+                                  ((200, {"time_ms": "1000", "talkback_protocol": "TB3"}), .02),
+                                  ((200, {"time_ms": 1000, "talkback_protocol": "TB3"}), 1.1)):
             client.request = Mock(return_value=response)
             with patch("pc.bluetooth_client.time.monotonic", side_effect=[10, 10 + elapsed]), \
                     self.assertRaisesRegex(RuntimeError, "Camera clock unavailable"):
                 client.talkback_clock()
 
-    def test_older_camera_clock_falls_back_to_synchronized_system_time(self):
-        client = CameraBluetoothClient("127.0.0.1", "secret")
-        client.request = Mock(return_value=(404, {}))
-        with patch("pc.bluetooth_client.time.time", return_value=100):
-            self.assertEqual(client.talkback_clock()(), 100000)
+    def test_incompatible_camera_requires_paired_update(self):
+        client = CameraBluetoothClient("127.0.0.1")
+        for response in ((404, {}), (200, {"time_ms": 1000}),
+                         (200, {"time_ms": 1000, "talkback_protocol": "TB2"})):
+            client.request = Mock(return_value=response)
+            with self.assertRaisesRegex(RuntimeError, "update PC and camera together"):
+                client.talkback_clock()
 
     def test_fixed_binding_survives_restart_and_rejects_other_devices(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -149,27 +175,28 @@ class BluetoothControlTests(unittest.TestCase):
         self.assertEqual(parse_devices("junk\nDevice aa:bb:cc:dd:ee:ff Headset\n"),
                          [{"mac": "AA:BB:CC:DD:EE:FF", "name": "Headset"}])
 
-    def test_authenticated_camera_scan_and_operator_selection(self):
+    def test_token_free_camera_scan_and_operator_selection(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "selected"
             control = BluetoothControl(path, run=lambda command, timeout=20: (
                 0, "Device AA:BB:CC:DD:EE:FF Headset\n" if command[-1] == "devices" else ""))
-            camera = ThreadingHTTPServer(("127.0.0.1", 0), camera_handler(control, "secret"))
+            camera = ThreadingHTTPServer(("127.0.0.1", 0), camera_handler(control))
             camera_thread = threading.Thread(target=camera.serve_forever, daemon=True)
             camera_thread.start()
-            client = CameraBluetoothClient("127.0.0.1", "secret")
+            client = CameraBluetoothClient("127.0.0.1")
             client.base = f"http://127.0.0.1:{camera.server_port}/bluetooth"
             operator = ThreadingHTTPServer(("127.0.0.1", 0),
                 operator_handler(RecordingManager(directory), bluetooth=client))
             operator_thread = threading.Thread(target=operator.serve_forever, daemon=True)
             operator_thread.start()
             try:
-                with self.assertRaises(HTTPError) as error:
-                    urlopen(f"http://127.0.0.1:{camera.server_port}/bluetooth/status")
-                self.assertEqual(error.exception.code, 403)
-                with self.assertRaises(HTTPError) as error:
-                    urlopen(f"http://127.0.0.1:{camera.server_port}/bluetooth/clock")
-                self.assertEqual(error.exception.code, 403)
+                for action in ("status", "clock"):
+                    with urlopen(f"http://127.0.0.1:{camera.server_port}/bluetooth/{action}") as response:
+                        self.assertEqual(json.load(response)["talkback_protocol"], "TB3")
+                for body in (b"[]", b"null", b"{", b"{}", bytes(257)):
+                    with self.assertRaises(HTTPError) as error:
+                        urlopen(Request(f"http://127.0.0.1:{camera.server_port}/bluetooth/select", data=body))
+                    self.assertEqual(error.exception.code, 400)
                 self.assertGreater(client.request("clock")[1]["time_ms"], 0)
                 base = f"http://127.0.0.1:{operator.server_port}/api/bluetooth"
                 with urlopen(Request(base + "/scan", data=b"", method="POST")) as response:

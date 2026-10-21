@@ -3,7 +3,11 @@ param([switch]$CheckOnly)
 
 $ErrorActionPreference = 'Stop'
 Push-Location $PSScriptRoot
+Import-Module (Join-Path $PSScriptRoot 'scripts/NetworkDeployment.psm1') -DisableNameChecking
+$maintenance = $null
+$maintenanceSuccess = $false
 try {
+    if ($CheckOnly) { [void](Get-MaintenanceOperator $PSScriptRoot) }
     $composeOptions = @('compose', '-f', 'compose.yaml')
     $containers = @(& docker @composeOptions ps --all --quiet server)
     if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect the Docker project. Check that Docker Desktop is running.' }
@@ -26,8 +30,10 @@ try {
         }
     }
     if (-not $CheckOnly) {
+        $maintenance = Enter-ProjectMaintenance $PSScriptRoot -StopOnly
         & docker @composeOptions stop server
         if ($LASTEXITCODE -ne 0) { throw 'Docker could not stop the operator.' }
         Write-Host 'PC operator stopped. Saved recordings remain in the recordings folder.'
+        $maintenanceSuccess = $true
     }
-} finally { Pop-Location }
+} finally { try { Exit-ProjectMaintenance $maintenance $maintenanceSuccess } finally { Pop-Location } }

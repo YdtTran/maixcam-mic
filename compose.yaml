@@ -8,6 +8,7 @@ services:
     init: true
     stop_grace_period: 2m
     environment:
+      CAMERA_BASE_ROTATION: ${CAMERA_BASE_ROTATION:-0}
       MAIX_USB_IP: ${MAIX_USB_IP:-10.172.16.1}
       MTX_RTSPTRANSPORTS: udp,tcp
       RTSP_TRANSPORT: ${RTSP_TRANSPORT:-tcp}
@@ -35,12 +36,6 @@ services:
         max-size: '10m'
         max-file: '3'
     volumes:
-      - type: bind
-        source: ./.talkback_token
-        target: /app/.talkback_token
-        read_only: true
-        bind:
-          create_host_path: false
       - type: bind
         source: ./recordings
         target: /app/recordings

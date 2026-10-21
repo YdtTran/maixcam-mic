@@ -21,7 +21,9 @@ historical diagnostics, not evidence of feature completion. Use the
 and [session log](sessions/2026-10-10-rtsp-latency.md); current native PID/logs
 are in `.runtime/operator-native.*`.
 
-## Protocol map
+For the current release, talkback uses token-free TB3 (24-byte header, at most 320 PCM bytes; 344-byte maximum). Camera HTTP control has no shared-token header. PC and camera must update together; see [current architecture](architecture.md). The dated prototype sections below retain their original TB2 evidence.
+
+## Historical protocol map (2026-10-10)
 
 | Path | Codec / format | Media transport | Signaling and ports |
 |---|---|---|---|

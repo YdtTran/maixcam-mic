@@ -1,8 +1,9 @@
 # Current architecture, data pipelines and protocols
 
-This describes the supported Docker/SCO configuration, updated on 2026-10-16
-for camera-side pixel rotation. The original architecture documentation was
-read-only; the later rotation deployment changed the camera video application.
+This describes the supported Docker/SCO configuration, updated on 2026-10-21
+for native-bound camera streaming and PC display orientation. These source
+changes await redeployment verification; earlier deployment evidence is in the
+session logs. The diagram retains the earlier camera pixel-rotation path.
 Physical audio/video latency and synchronization remain unmeasured for this path.
 
 The selected defaults are **RTSP/TCP video-only monitoring, independent worker
@@ -19,10 +20,10 @@ Editable diagram source: [architecture.mmd](architecture.mmd).
 | Component | Responsibility | Implementation |
 | --- | --- | --- |
 | Worker headset | Microphone capture and speaker playback over Bluetooth SCO/eSCO; current setup uses narrowband CVSD, 8 kHz mono PCM at the ALSA boundary | BlueZ and BlueALSA on MaixCAM |
-| Camera video application | Captures 432×768 NV21, rotates all pixels 90° CCW, hardware encodes 768×432 and serves H.264 on RTSP/TCP `/live` | `maix/rtsp_av.py`, `maix/video_rtsp.py`, `maix/rtsp_app.yaml` |
-| Camera Bluetooth service | Selected-headset connection, BlueALSA routing, SCO preparation/recovery and authenticated control API | `maix/bluetooth_audio.py`, `maix/bluetooth_control.py` |
+| Camera video application | Defaults to native-bound 768×432 NV21 at 20fps, hardware encodes and serves H.264 on `/live`; optional Python fallback | `maix/rtsp_av.py`, `maix/video_rtsp.py`, `maix/rtsp_app.yaml` |
+| Camera Bluetooth service | Selected-headset connection, BlueALSA routing, SCO preparation/recovery and token-free control API | `maix/bluetooth_audio.py`, `maix/bluetooth_control.py` |
 | Camera microphone sender | Captures headset PCM and sends G.711 mu-law RTP to the PC | `maix/headset_mic_stream.py` |
-| Camera talkback receiver | Validates TB2 datagrams, reorders bounded audio and plays through ALSA `bt_output` | `maix/talkback_receiver.py`, deployed copy of `pc/talkback_protocol.py` |
+| Camera talkback receiver | Validates TB3 datagrams, reorders bounded audio and plays through ALSA `bt_output` | `maix/talkback_receiver.py`, deployed copy of `pc/talkback_protocol.py` |
 | PC supervisor | Starts MediaMTX, the video publisher, independent return receiver and operator server | `app.py` |
 | MediaMTX | Three independent media paths: `/maix01`, `/headsetmic`, `/talkback`; bridges RTSP and browser WebRTC | `mediamtx.yml` |
 | PC operator backend | Serves UI/API/files, relays camera control, manages talkback and recording | `pc/operator_server.py`, `pc/bluetooth_client.py`, `pc/talkback.py` |
@@ -38,13 +39,23 @@ MaixCAM. The browser runs on the Windows PC.
 
 ### 1. Camera to operator video
 
-`Camera → full-frame CCW rotation → hardware H.264 RTSP/TCP /live → PC FFmpeg → MediaMTX /maix01 → browser`
+`Camera → native-bound hardware H.264 RTSP/TCP /live → PC FFmpeg → MediaMTX /maix01 → browser`
 
 FFmpeg reads `rtsp://<MAIX_IP>:8554/live` with RTP interleaved over RTSP/TCP,
 maps only video, and copies H.264 without re-encoding. It publishes to local
 `rtsp://127.0.0.1:8554/maix01`, also over TCP in this configuration. The browser
 negotiates reception at `http://127.0.0.1:8889/maix01/whep` and receives H.264
 using WebRTC over UDP. TCP is used on the RTSP legs; the browser media leg is UDP.
+
+PC `CAMERA_BASE_ROTATION=0|90|180|270` (default `0`) adds a fixed mounting
+offset to the manager selection: `(base_rotation + manager_rotation) % 360`,
+counter-clockwise. Compose passes this setting from `.env`; both Python entry
+points also accept `--camera-base-rotation`. The API keeps `rotation` as the
+saved manager selection and returns `effective_rotation` for rendering. The
+browser uses the existing canvas quarter-turn renderer (CSS at 0/180). Both
+recorders copy the source H.264 and write the effective MP4 display matrix;
+existing recordings and the saved manager selection are unchanged. Rotation
+is locked during recording/finalization. See [orientation configuration](rtsp-transport.md#pc-display-orientation).
 
 ### 2. Worker headset microphone to operator listening
 
@@ -64,7 +75,7 @@ of the video publisher, so return loss does not intentionally stop video.
 
 ### 3. Operator microphone to worker headset
 
-`Browser microphone → WebRTC/WHIP → MediaMTX /talkback → PC FFmpeg → PCM/TB2 UDP → MaixCAM ALSA → headset`
+`Browser microphone → WebRTC/WHIP → MediaMTX /talkback → PC FFmpeg → PCM/TB3 UDP → MaixCAM ALSA → headset`
 
 While Talk is held, the browser captures an audio track and submits an SDP offer
 through `POST /api/talkback/offer`. The backend proxies signaling to MediaMTX
@@ -76,7 +87,7 @@ and decodes/resamples to 8 kHz mono PCM16. A paced sender emits up to 320 PCM
 bytes every 20 ms to camera UDP port 9002. It retains at most three queued
 frames (60 ms) and drops frames older than 120 ms.
 
-The camera authenticates TB2 packets and uses a 40 ms reorder window, capped at
+The camera validates TB3 framing and uses a 40 ms reorder window, capped at
 six frames, dropping audio more than 120 ms late. It writes PCM to `aplay` on
 `bt_output`; SCO playback requests a 20 ms period and 80 ms buffer. Silence is
 paced through temporary gaps. These are buffer policies, not measured physical
@@ -91,10 +102,10 @@ MediaMTX rejects a second publisher on `/talkback`.
 
 The browser calls HTTP JSON APIs on port 8000 for Bluetooth status/selection,
 diagnostics and recording lifecycle. The PC proxies headset operations to
-`http://<MAIX_IP>:8765/bluetooth/{status,scan,select,clock}` with an
-`X-Control-Token` header. Before a talk session, it samples the authenticated
+`http://<MAIX_IP>:8765/bluetooth/{status,scan,select,clock}` without a shared-token header. Status and clock responses identify `talkback_protocol: TB3`.
+Before a talk session, the PC requires TB3 and samples the
 camera clock and anchors packet timestamps to PC monotonic time, retaining the
-two-second TB2 freshness check without changing either device's system clock.
+two-second TB3 freshness check without changing either device's system clock.
 
 ## Protocol and port map
 
@@ -107,10 +118,10 @@ two-second TB2 freshness check without changing either device's system clock.
 | Browser playback signaling | WHEP HTTP with SDP | PC loopback TCP 8889, `/maix01/whep` and `/headsetmic/whep` |
 | Browser microphone signaling | Operator HTTP SDP proxy → MediaMTX WHIP | PC loopback TCP 8000 → container TCP 8889, `/talkback/whip` |
 | Browser ↔ MediaMTX media | WebRTC: ICE/STUN connectivity, DTLS key negotiation, SRTP/SRTCP over UDP | PC loopback UDP 8189; browser ephemeral port |
-| PC → camera talkback | Custom authenticated TB2 UDP, PCM16 little-endian 8 kHz mono | Camera UDP 9002; PC ephemeral source port |
-| PC → camera control | HTTP JSON with shared-token header | Camera TCP 8765 |
+| PC → camera talkback | Custom token-free TB3 UDP, PCM16 little-endian 8 kHz mono | Camera UDP 9002; PC ephemeral source port |
+| PC → camera control | Token-free HTTP JSON | Camera TCP 8765 |
 | Browser → operator | HTTP UI, JSON API, recording playback/download | PC loopback TCP 8000 |
-| Installer → camera | SSH/SCP through PuTTY, pinned host key | Camera SSH port, normally TCP 22; deployment only |
+| Installer → camera | Windows OpenSSH SSH/SCP, pinned host key | Camera SSH port, normally TCP 22; deployment only |
 
 Compose publishes web/RTSP/WebRTC ports on `127.0.0.1` for a browser on this PC;
 UDP 8004/8005 accepts the camera return through Docker's published ports. Camera
@@ -118,25 +129,24 @@ UDP 8004/8005 accepts the camera return through Docker's published ports. Camera
 8002/8003 UDP RTSP ports belong to optional UDP RTSP operation and are not host
 publications in this Compose setup. No WebRTC TCP listener is configured.
 
-### TB2 wire format
+### TB3 wire format
 
-Each datagram is `24-byte header + 0..320-byte PCM payload + 16-byte MAC`.
-Maximum size is 360 bytes; a stop packet has no PCM.
+Each datagram is `24-byte header + 0..320-byte PCM payload`.
+Maximum size is 344 bytes; a stop packet has no PCM.
 
 | Field | Size | Encoding |
 | --- | --- | --- |
-| Magic | 3 bytes | ASCII `TB2` |
+| Magic | 3 bytes | ASCII `TB3` |
 | Stop flag | 1 byte | 0 for audio, 1 for stop |
 | Session | 8 bytes | Unsigned integer, network byte order |
 | Sequence | 4 bytes | Unsigned integer, network byte order |
 | Timestamp | 8 bytes | UTC milliseconds, network byte order, calibrated to camera time |
 | Audio | Up to 320 bytes | Even-length PCM16 little-endian, mono, 8 kHz |
-| Authentication | 16 bytes | First 16 bytes of HMAC-SHA256 over header and payload, using the shared 16-byte token |
 
-The decoder rejects invalid authentication, format and timestamps more than
+The decoder rejects invalid format and timestamps more than
 two seconds from camera time. The jitter buffer rejects duplicate/played
-sequence numbers and mismatched sessions. TB2 authenticates audio but does not
-encrypt it. Browser media uses WebRTC encryption; camera RTSP/RTP and control
+sequence numbers and mismatched sessions. TB3 rejects TB1/TB2 and provides no sender authentication, tamper detection or
+encryption. Update PC and camera together; incompatible calibration fails clearly. Browser media uses WebRTC encryption; camera RTSP/RTP and control
 HTTP use the trusted local network. The prototype frontend login is a browser
 gate, not server API authorization.
 
@@ -170,7 +180,7 @@ These distinct arrival points do not establish physical A/V synchronization.
 See [recording details and recovery](multistream-recording.md) for timing limits.
 
 Saved MP4s, metadata, manifests and recorder logs live in the host `recordings/`
-bind mount. The matching `.talkback_token` is a read-only bind mount. Browser
+bind mount. No application token is mounted. Browser
 worker/preferences/demo metadata lives in IndexedDB; login state lives in
 sessionStorage. There is no required server database in the current Compose
 stack. Worker #12 is synthetic demo content; Worker #07 uses the physical camera.

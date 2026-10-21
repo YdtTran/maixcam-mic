@@ -225,11 +225,9 @@ class BluetoothAudioConnectorTests(unittest.TestCase):
 
     def test_service_start_reconnects_saved_fixed_device(self):
         with tempfile.TemporaryDirectory() as directory:
-            token = Path(directory) / "token"
-            token.write_text("a" * 32)
             selection = Path(directory) / "selected"
             selection.write_text("28:52:E0:16:73:CE\n")
-            with patch("sys.argv", ["bluetooth_audio.py", "--token", str(token), "--selection", str(selection)]), \
+            with patch("sys.argv", ["bluetooth_audio.py", "--selection", str(selection)]), \
                  patch("maix.bluetooth_audio.serve") as serve, \
                  patch("maix.bluetooth_audio.BluetoothAudioConnector") as connector, \
                  patch("maix.bluetooth_audio.threading.Thread") as thread:

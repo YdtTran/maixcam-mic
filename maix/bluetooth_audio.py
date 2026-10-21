@@ -195,7 +195,6 @@ def main():
                         help="Opt-in hci0 reset after bound headset SCO stays in state 8 for 30s; no other links allowed")
     parser.add_argument("--prepare-sco", action="store_true",
                         help="Prepare powered controller and verified MTU before starting audio clients; exit after one attempt")
-    parser.add_argument("--token", type=Path, default=Path("/root/.talkback_token"))
     args = parser.parse_args()
     if args.sco_mtu is not None and (args.playback_profile != "sco" or not 2 <= args.sco_mtu <= 254 or args.sco_mtu % 2):
         parser.error("--sco-mtu requires --playback-profile sco and an even size from 2 to 254")
@@ -209,9 +208,6 @@ def main():
             raise SystemExit(1)
         connector._route_playback()
         return
-    token = args.token.read_text().strip()
-    if len(bytes.fromhex(token)) != 16:
-        raise ValueError("control token must contain 32 hex digits")
     mac = args.fixed_mac or BluetoothControl(args.selection).selected()
     if not mac:
         parser.error("set --fixed-mac once to bind this camera to its headset")
@@ -223,7 +219,7 @@ def main():
     reconnect = threading.Thread(target=reconnect_headset, args=(connector, stop), daemon=True)
     reconnect.start()
     try:
-        serve(control, token)
+        serve(control)
     finally:
         stop.set()
         reconnect.join(timeout=2)

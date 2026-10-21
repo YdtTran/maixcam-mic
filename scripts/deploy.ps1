@@ -18,10 +18,15 @@ $context = $null
 $backup = $null
 $cameraTouched = $false
 $pcTouched = $false
+$recovery = $null
+$legacyRecoveryReady = $true
+$oldCameraIP = $null
 $exitCode = 2
 $deploymentId = [guid]::NewGuid().ToString('N')
 $remoteBackup = "/root/workercam-backup-$deploymentId"
 $configurationStatus = 'UNCHANGED'
+$maintenance = $null
+$maintenanceSuccess = $false
 
 # Read identity and only non-secret settings. No Bluetooth scan or MAC mutation.
 $inventoryCommand = @'
@@ -79,7 +84,7 @@ function Get-DeploymentHash {
 }
 
 function Test-Application {
-    param([string]$CameraIP, [string]$UsbIP, [string]$LaptopIP, [string]$EarbudsMac)
+    param([string]$CameraIP, [string]$UsbIP, [string]$LaptopIP, [string]$EarbudsMac, [switch]$PreviousRelease)
     Write-Host 'Checking deployed settings, camera processes, Docker health and both media streams...'
     $remote = @'
 set -eu
@@ -106,6 +111,18 @@ PY
 '@
     $remote = $remote.Replace('__LAPTOP__', $LaptopIP).Replace('__CAMERA__', $CameraIP).Replace('__EARBUDS__', $EarbudsMac)
     Invoke-MaixSsh $context $UsbIP $remote | Out-Null
+    if (-not $PreviousRelease) {
+        $protocol = Invoke-MaixSsh $context $UsbIP "cd /root; python3 -c 'import talkback_protocol; print(talkback_protocol.PROTOCOL_VERSION)'"
+        if ($protocol.Trim() -ne 'TB3') { throw 'Installed camera protocol is incompatible; update PC and camera together to TB3.' }
+        $protocolText = [IO.File]::ReadAllText((Join-Path $root 'pc/talkback_protocol.py')).Replace("`r`n", "`n")
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { $protocolHash = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($protocolText))).Replace('-', '') }
+        finally { $sha.Dispose() }
+        $installedHash = Invoke-MaixSsh $context $UsbIP 'python3 -c ''import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("/root/talkback_protocol.py").read_bytes()).hexdigest())'''
+        if ($installedHash.Trim() -ine $protocolHash) { throw 'Installed camera protocol payload is incompatible with this PC release.' }
+        $cameraStatus = Invoke-RestMethod "http://${CameraIP}:8765/bluetooth/status" -TimeoutSec 5
+        if ($cameraStatus.talkback_protocol -ne 'TB3') { throw 'Running camera protocol is incompatible; update PC and camera together to TB3.' }
+    }
     $container = Invoke-NetworkProcess docker.exe @('compose', 'ps', '--quiet', 'server')
     if (-not $container) { throw 'Operator container is not running.' }
     $inspection = Invoke-NetworkProcess docker.exe @('inspect', $container) | ConvertFrom-Json
@@ -116,6 +133,23 @@ PY
     if ($diagnostics.media_ip -ne $CameraIP -or -not $diagnostics.wifi.reachable) { throw 'Application cannot reach camera Wi-Fi services.' }
     $talkback = Invoke-RestMethod 'http://127.0.0.1:8000/api/talkback/status' -TimeoutSec 5
     if (-not $talkback.available -or $talkback.error) { throw 'Talkback is unavailable.' }
+    $control = Invoke-RestMethod 'http://127.0.0.1:8000/api/bluetooth/status' -TimeoutSec 5
+    if ($control.error -or $control.selected -ine $EarbudsMac) { throw 'Camera control or fixed headset binding verification failed.' }
+    if (-not $PreviousRelease -and $talkback.protocol -ne 'TB3') { throw 'PC protocol is incompatible; update PC and camera together to TB3.' }
+    if (-not $PreviousRelease -and @($inspection[0].Mounts | Where-Object Destination -eq '/app/.talkback_token').Count) {
+        throw 'New PC still mounts a legacy token; recreate the compatible TB3 service.'
+    }
+    if (-not $PreviousRelease -and $env:OS -eq 'Windows_NT') {
+        if (-not (Test-HostUdpListeners -Ports @(8004, 8005))) {
+            Write-Host 'Windows host UDP listener 8004/8005 missing; checking recording status and recreating container...'
+            Invoke-ProjectScript 'stop_docker_pc.ps1' @('-CheckOnly')
+            Invoke-NetworkProcess docker.exe @('compose', 'up', '-d', '--force-recreate', '--no-deps', 'server') | Out-Null
+            if (-not (Test-HostUdpListeners -Ports @(8004, 8005))) {
+                throw 'Windows host UDP listener 8004/8005 remains missing after container recreation.'
+            }
+            Write-Host 'Recreated container; host UDP listeners verified (8004, 8005).'
+        }
+    }
     # Decoding verifies actual H.264 and G.711 delivery, including camera -> laptop Wi-Fi.
     foreach ($stream in @('maix01', 'headsetmic')) {
         try {
@@ -193,7 +227,6 @@ try {
     Write-Host "Laptop Wi-Fi IP:  $($laptop.Address)`nMaixCAM Wi-Fi IP: $wifiIP`nLaptop USB IP:    $($selected.Usb.Address)`nMaixCAM USB IP:   $usbIP`nMaixCAM Wi-Fi MAC: $wifiMac`nEarbuds MAC:      [UNCHANGED]"
     if ((Invoke-NetworkProcess docker.exe @('info', '--format', '{{.OSType}}')) -ne 'linux') { throw 'Start Docker Desktop with Linux containers.' }
     Invoke-NetworkProcess docker.exe @('compose', 'config', '--quiet') | Out-Null
-    if (-not (Test-Path -LiteralPath .talkback_token)) { throw 'Missing .talkback_token. Restore the existing camera pairing token before deployment.' }
     Invoke-ProjectScript 'stop_docker_pc.ps1' @('-CheckOnly')
     $values = @{ LAPTOP_WIFI_IP = $laptop.Address; MAIXCAM_WIFI_IP = $wifiIP;
         LAPTOP_USB_IP = $selected.Usb.Address; MAIXCAM_USB_IP = $usbIP;
@@ -220,6 +253,7 @@ try {
         exit 0
     }
     $exitCode = 4
+    $maintenance = Enter-ProjectMaintenance $root -StopOnly
     if ($needsDeployment) {
         $backup = Join-Path $root ".runtime/deploy-backups/$deploymentId"
         [void](New-Item -ItemType Directory -Path $backup -Force)
@@ -228,12 +262,33 @@ try {
         $oldImage = $null
         $oldRunning = $false
         if ($oldContainer) {
-            $oldImage = Invoke-NetworkProcess docker.exe @('inspect', '--format', '{{.Image}}', $oldContainer)
-            $oldRunning = (Invoke-NetworkProcess docker.exe @('inspect', '--format', '{{.State.Running}}', $oldContainer)) -eq 'true'
+            $previous = (Invoke-NetworkProcess docker.exe @('inspect', $oldContainer) | ConvertFrom-Json)[0]
+            $oldImage = $previous.Image
+            $oldRunning = $previous.State.Running -or $maintenance.LegacyWasRunning
+            $recovery = Save-PreviousRuntime $previous $backup
+            $legacyRecoveryReady = $recovery.LegacyReady
+            $oldCameraIP = @($previous.Config.Cmd)[@($previous.Config.Cmd).IndexOf('--maix-ip') + 1]
             Invoke-NetworkProcess docker.exe @('tag', $oldImage, "workercam-rollback:$deploymentId") | Out-Null
         }
+        $legacyInfo = @'
+python3 - <<'PY'
+import hashlib,json,pathlib,re
+receiver = pathlib.Path('/root/talkback_receiver.py').read_text()
+legacy = '.talkback_token' in receiver
+try:
+    value = pathlib.Path('/root/.talkback_token').read_text().strip().lower()
+except (OSError, UnicodeError):
+    value = ''
+print(json.dumps(dict(legacy=legacy, digest=hashlib.sha256(value.encode()).hexdigest() if re.fullmatch('[0-9a-f]{32}', value) else None)))
+PY
+'@
+        $cameraLegacy = Invoke-MaixSsh $context $usbIP $legacyInfo | ConvertFrom-Json
+        if ($cameraLegacy.legacy -and (-not $recovery -or -not $recovery.TokenDigest -or $recovery.TokenDigest -ne $cameraLegacy.digest)) {
+            $legacyRecoveryReady = $false
+        }
+        if (-not $legacyRecoveryReady) { Write-Warning 'Old-release talkback recovery unavailable: legacy token material is missing, malformed or mismatched. Token-free deployment will proceed.' }
         [IO.File]::WriteAllText((Join-Path $backup 'recovery.json'), (@{ remoteBackup = $remoteBackup; usbIP = $usbIP;
-            envExisted = $envExisted; oldImage = $oldImage; oldRunning = $oldRunning } | ConvertTo-Json))
+            maintenanceOwner = $maintenance.Owner; envExisted = $envExisted; oldImage = $oldImage; oldRunning = $oldRunning; legacyRecoveryReady = $legacyRecoveryReady } | ConvertTo-Json))
         if ($changed) { [IO.File]::WriteAllText($envPath, $updatedText, (New-Object Text.UTF8Encoding $false)); $configurationStatus = 'UPDATED' }
         # Environment variables override .env in Compose: refuse a stale shell override.
         $resolved = Invoke-NetworkProcess docker.exe @('compose', 'config', '--format', 'json') | ConvertFrom-Json
@@ -241,6 +296,11 @@ try {
             throw 'Compose is overriding discovered addresses. Remove stale MAIX_IP/MAIX_USB_IP shell environment variables.'
         }
         Invoke-ProjectScript 'deploy_pc.ps1' @('-CheckOnly')
+        # Keep the old operator stopped throughout the incompatible-version interval.
+        $pcTouched = $true
+        Invoke-ProjectScript 'stop_docker_pc.ps1'
+        # Upgrade before camera mutation: the previous image may ignore the marker.
+        if ($maintenance.RequiresUpgrade) { Invoke-ProjectScript 'deploy_pc.ps1' @('-Build', '-Recreate') }
         Write-Host 'Installing MaixCAM using deploy_maix.ps1; then rebooting...'
         $cameraTouched = $true
         $cameraOptions = @{ MaixHost = $usbIP; PcIp = $laptop.Address; HeadsetMac = $earbuds;
@@ -258,6 +318,7 @@ try {
     do {
         try { Test-Application $wifiIP $usbIP $laptop.Address $earbuds; break }
         catch {
+            if ($_.Exception.Message -like '*incompatible*' -or $_.Exception.Message -like '*legacy token*' -or $_.Exception.Message -like '*remains missing*') { throw }
             if ($needsDeployment -and -not $returnRecoveryUsed -and $_.Exception.Message -like 'Headset return verification failed:*') {
                 $returnRecoveryUsed = $true
                 Write-Host 'Headset return unavailable. Performing one recording-safe PC stop/start to refresh Docker UDP forwarding...'
@@ -272,23 +333,31 @@ try {
             Start-Sleep -Seconds 3
         }
     } while ($true)
+    try {
+        Invoke-MaixSsh $context $usbIP 'python3 -c ''from pathlib import Path; p=Path("/root/.talkback_token"); p.unlink(missing_ok=True)''' | Out-Null
+        $obsoleteToken = Join-Path $root '.talkback_token'
+        if (Test-Path -LiteralPath $obsoleteToken -PathType Leaf) { Remove-Item -LiteralPath $obsoleteToken -Force }
+    } catch { Write-Warning 'TB3 verified; obsolete token cleanup failed. The ignored legacy file does not affect startup.' }
     [void](New-Item -ItemType Directory -Path (Split-Path $statePath -Parent) -Force)
     [IO.File]::WriteAllText($statePath, (@{ hash = $hash; verifiedAt = [datetime]::UtcNow.ToString('o') } | ConvertTo-Json))
     $status = if ($needsDeployment) { 'SUCCESS (deployed and verified)' } else { 'UNCHANGED (verified)' }
-    Write-Host "`nDeployment`n------------------------------`nConfiguration:   $configurationStatus`nLaptop services: $status`nMaixCAM app:     $status`nConnectivity:    VERIFIED (video, headset return, talkback API)`nDeployment completed successfully."
-    exit 0
+    $successSummary = "`nDeployment`n------------------------------`nConfiguration:   $configurationStatus`nLaptop services: $status`nMaixCAM app:     $status`nConnectivity:    VERIFIED (video, headset return, talkback API)`nDeployment completed successfully."
+    $maintenanceSuccess = $true
+    $exitCode = 0
 } catch {
     Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
-    if ($backup) {
+    if ($backup -and $maintenance) {
         Write-Host "Recovering previous configuration. Backup: $backup"
         $rollbackFailed = $false
         try {
             if ($envExisted) { Copy-Item -LiteralPath (Join-Path $backup '.env') -Destination $envPath -Force }
             elseif (Test-Path -LiteralPath $envPath) { Remove-Item -LiteralPath $envPath }
+            if ($pcTouched) { Invoke-ProjectScript 'stop_docker_pc.ps1' }
             if ($cameraTouched) {
                 $restore = @'
 set -eu
 backup=__BACKUP__
+test -d "$backup" || { echo 'Camera backup unavailable'; exit 1; }
 if test -d "$backup"; then
     for name in rtsp_av.py video_rtsp.py bluetooth_audio.py bluetooth_control.py headset_mic_stream.py talkback_receiver.py talkback_protocol.py rtsp_app.yaml background_services.rc.local workercam.env .talkback_token; do
         if test -f "$backup/$name"; then cp -p "$backup/$name" "/root/$name"; fi
@@ -304,16 +373,22 @@ fi
 '@
                 Invoke-MaixSsh $context $usbIP ($restore.Replace('__BACKUP__', $remoteBackup)) -TimeoutSeconds 60 | Out-Null
             }
-            if ($pcTouched -and $oldImage) {
-                $override = Join-Path $backup 'rollback.compose.yaml'
-                [IO.File]::WriteAllText($override, "services:`n  server:`n    image: workercam-rollback:$deploymentId`n")
-                Invoke-NetworkProcess docker.exe @('compose', '-f', 'compose.yaml', '-f', $override, 'up', '-d', '--no-build', '--wait', '--wait-timeout', '120', 'server') -TimeoutSeconds 180 | Out-Null
-                if (-not $oldRunning) { Invoke-ProjectScript 'stop_docker_pc.ps1' }
+            if ($pcTouched -and $oldImage -and $recovery -and $legacyRecoveryReady) {
+                # Restore the inspected configuration, never the edited new Compose file.
+                # Old images cannot honor the marker. Restore them stopped until explicit recovery.
+                Invoke-NetworkProcess docker.exe @('compose', '-f', $recovery.Path, 'create', '--no-build', 'server') -TimeoutSeconds 180 | Out-Null
+                throw 'Previous PC configuration restored stopped. Verify camera recovery before restarting it; maintenance owner retained.'
             }
-            Write-Host 'Previous configuration restored; camera reboot requested if installation had begun. Check old-address reachability before retrying.'
+            if (-not $legacyRecoveryReady) { throw 'Old-release talkback recovery unavailable: missing, malformed or mismatched legacy token material. Snapshots retained.' }
+            if (-not $oldImage) { throw 'No previous PC image is available; camera recovery attempted, compatible-pair recovery is incomplete.' }
         } catch { $rollbackFailed = $true; Write-Host "ROLLBACK INCOMPLETE: $($_.Exception.Message). See scripts/README.md and $backup/recovery.json" }
         if ($rollbackFailed) { $exitCode = 6 }
     }
     Write-Host "Deployment failed (exit $exitCode). No success claimed."
-    exit $exitCode
-} finally { Close-SshContext $context; Pop-Location }
+} finally {
+    try { Exit-ProjectMaintenance $maintenance $maintenanceSuccess }
+    catch { Write-Host "Maintenance release failed: $($_.Exception.Message). Inspect the retained owner before recovery."; $exitCode = 6 }
+    finally { Close-SshContext $context; Pop-Location }
+}
+if ($exitCode -eq 0) { Write-Host $successSummary }
+exit $exitCode

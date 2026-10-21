@@ -41,23 +41,17 @@ foreach ($source in $files.Keys) {
         throw "Required camera file is missing: $source"
     }
 }
-$tokenPath = Join-Path $PSScriptRoot '.talkback_token'
-if (-not (Test-Path -LiteralPath $tokenPath -PathType Leaf)) {
-    $tokenBytes = New-Object byte[] 16
-    $tokenGenerator = [Security.Cryptography.RandomNumberGenerator]::Create()
-    try { $tokenGenerator.GetBytes($tokenBytes) } finally { $tokenGenerator.Dispose() }
-    [IO.File]::WriteAllText($tokenPath, ([BitConverter]::ToString($tokenBytes).Replace('-', '').ToLowerInvariant()))
-}
-if ((Get-Content -LiteralPath $tokenPath -Raw).Trim() -notmatch '^[0-9a-fA-F]{32}$') {
-    throw '.talkback_token must contain 32 hexadecimal characters.'
-}
+Write-Host 'TB3 release: update PC and camera together using scripts/deploy.ps1; older PC releases cannot send compatible talkback.'
 $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $stagingPath = Join-Path $tempRoot "workercam-$deploymentId"
 $remoteStage = "/root/workercam-deploy-$deploymentId"
 $sshContext = $null
 $target = "root@$MaixHost"
 New-Item -ItemType Directory -Path $stagingPath | Out-Null
+$maintenance = $null
+$maintenanceSuccess = $false
 try {
+    $maintenance = Enter-ProjectMaintenance $PSScriptRoot
     $sshContext = New-SshContext -KeyPath $KeyPath -Password $Password
     if ($HostKey) {
         # Compatibility for existing callers: also require the supplied fingerprint.
@@ -73,7 +67,6 @@ try {
         $content = [IO.File]::ReadAllText((Join-Path $PSScriptRoot $source)).Replace("`r`n", "`n")
         [IO.File]::WriteAllText($destination, $content, (New-Object Text.UTF8Encoding $false))
     }
-    Copy-Item -LiteralPath $tokenPath -Destination (Join-Path $stagingPath '.talkback_token')
     [IO.File]::WriteAllText((Join-Path $stagingPath 'workercam.env'),
         "PC_IP=$PcIp`nHEADSET_MAC=$HeadsetMac`nAUDIO_PROFILE=$AudioProfile`n")
     # All paths in the installer are fixed project paths or a generated hexadecimal id.
@@ -96,10 +89,10 @@ if test -d /maixapp/apps/maix_rtsp; then cp -Rp /maixapp/apps/maix_rtsp "$backup
 if test -f /maixapp/auto_start.txt; then cp -p /maixapp/auto_start.txt "$backup/auto_start.txt"; fi
 if test -f /maixapp/apps/app.info; then cp -p /maixapp/apps/app.info "$backup/app.info"; fi
 echo "Camera backup: $backup"
-for name in rtsp_av.py video_rtsp.py bluetooth_audio.py bluetooth_control.py headset_mic_stream.py talkback_receiver.py talkback_protocol.py rtsp_app.yaml background_services.rc.local workercam.env .talkback_token; do
+for name in rtsp_av.py video_rtsp.py bluetooth_audio.py bluetooth_control.py headset_mic_stream.py talkback_receiver.py talkback_protocol.py rtsp_app.yaml background_services.rc.local workercam.env; do
     cp "$name" "/root/$name"
 done
-chmod 600 /root/.talkback_token /root/workercam.env
+chmod 600 /root/workercam.env
 mkdir -p /maixapp/apps/maix_rtsp
 cp rtsp_av.py /maixapp/apps/maix_rtsp/main.py
 cp rtsp_app.yaml /maixapp/apps/maix_rtsp/app.yaml
@@ -135,9 +128,12 @@ echo 'Camera installation complete. A reboot activates the installed programs.'
     } else {
         Write-Host 'Reboot the camera before using the new files, or rerun with -Reboot when ready.'
     }
+    $maintenanceSuccess = $true
 } finally {
+    try { Exit-ProjectMaintenance $maintenance $maintenanceSuccess } finally {
     Close-SshContext $sshContext
     $resolvedStaging = [IO.Path]::GetFullPath($stagingPath)
     if ($resolvedStaging -ne (Join-Path $tempRoot "workercam-$deploymentId")) { throw 'Unexpected temporary cleanup path.' }
     Remove-Item -LiteralPath $resolvedStaging -Recurse -Force
+    }
 }

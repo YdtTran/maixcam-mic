@@ -5,7 +5,7 @@ The installed MaixCAM server delivered actual H.264 packets with explicit
 TCP-interleaved transport. UDP combined operation was restored temporarily
 during the investigation; the user subsequently chose **TCP video-only**.
 WHEP viewing, WHIP talkback and
-authenticated sequenced TB2 UDP packets remain the same architecture.
+sequenced TB3 UDP packets retain the current architecture. Historical trials below used TB2.
 
 The latest operator runtime is native Windows after Docker Desktop localhost
 access failed, including after restart. HTTP 200, camera TCP packets, H.264

@@ -20,13 +20,13 @@ except ImportError:  # Standalone deployment on MaixCAM.
     from talkback_protocol import decode, JitterBuffer
 
 
-def valid_packet(packet, token):
-    payload = decode(packet, token)
+def valid_packet(packet):
+    payload = decode(packet)
     return payload[:2] if payload else None
 
 
 class TalkbackReceiver:
-    def __init__(self, token, bind=("0.0.0.0", 9002), spawn=subprocess.Popen,
+    def __init__(self, bind=("0.0.0.0", 9002), spawn=subprocess.Popen,
                  pause_path=PAUSE_PATH, ack_path=ACK_PATH, duplex=False, playback_profile=None):
         self.playback_profile = playback_profile or ("sco" if duplex else "a2dp")
         if self.playback_profile not in ("a2dp", "sco") or (duplex and self.playback_profile != "sco"):
@@ -37,7 +37,6 @@ class TalkbackReceiver:
         self.retired = collections.deque(maxlen=64)
         self.generation = 0
         self.latest_timestamp = 0
-        self.token = token
         self.bind = bind
         self.spawn = spawn
         self.player = None
@@ -89,7 +88,7 @@ class TalkbackReceiver:
         self.ack_path.unlink(missing_ok=True)
 
     def accept(self, packet, now=None):
-        payload = decode(packet, self.token)
+        payload = decode(packet)
         if payload is None:
             return False
         now = time.monotonic() if now is None else now
@@ -194,7 +193,6 @@ class TalkbackReceiver:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--token", type=Path, default=Path("/root/.talkback_token"))
     parser.add_argument("--port", type=int, default=9002)
     parser.add_argument("--playback-profile", choices=("a2dp", "sco"),
                         help="Match connector route; defaults to SCO with --duplex, otherwise A2DP")
@@ -203,10 +201,7 @@ def main():
     args = parser.parse_args()
     if args.duplex and args.playback_profile == "a2dp":
         parser.error("--duplex requires SCO playback")
-    token = bytes.fromhex(args.token.read_text().strip())
-    if len(token) != 16:
-        raise ValueError("talkback token must contain 32 hex digits")
-    TalkbackReceiver(token, bind=("0.0.0.0", args.port), duplex=args.duplex,
+    TalkbackReceiver(bind=("0.0.0.0", args.port), duplex=args.duplex,
                      playback_profile=args.playback_profile).serve()
 
 

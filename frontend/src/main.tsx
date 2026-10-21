@@ -59,6 +59,8 @@ function App() {
   const [playback, setPlayback] = useState<Recording | null>(null);
   const [notice, setNotice] = useState("");
   const [recordingsError, setRecordingsError] = useState("");
+  const [metadataWarnings, setMetadataWarnings] = useState<string[]>([]);
+  const [maintenance, setMaintenance] = useState<RealStatus['maintenance']>(null);
   const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState(false);
   const [talking, setTalking] = useState(false);
@@ -66,6 +68,7 @@ function App() {
   const [recordStatusKnown, setRecordStatusKnown] = useState(false);
   const [recordFinalizing, setRecordFinalizing] = useState(false);
   const [rotation, setRotation] = useState(0);
+  const [effectiveRotation, setEffectiveRotation] = useState(0);
   const [rotationKnown, setRotationKnown] = useState(false);
   const rotationRevision = useRef(0);
   const [playerSize, setPlayerSize] = useState({ width: 0, height: 0 });
@@ -138,7 +141,12 @@ function App() {
       setRecordStatusKnown(status.status === "fulfilled");
       setRotationKnown(status.status === "fulfilled" && [0, 90, 180, 270].includes(status.value.rotation));
       if (status.status === "fulfilled") {
-        if ([0, 90, 180, 270].includes(status.value.rotation)) setRotation(status.value.rotation);
+        setMetadataWarnings(status.value.metadata_warnings ?? []);
+        setMaintenance(status.value.maintenance ?? null);
+        if ([0, 90, 180, 270].includes(status.value.rotation)) {
+          setRotation(status.value.rotation);
+          setEffectiveRotation(status.value.effective_rotation ?? status.value.rotation);
+        }
         setRecordFinalizing(Boolean(status.value.finalizing));
         if (status.value.error) setNotice(status.value.error);
         else if (wasFinalizing.current && !status.value.recording) setNotice("MaixCAM recording saved.");
@@ -182,9 +190,11 @@ function App() {
     rotationRevision.current++;
     setBusy(true);
     try {
-      const view = await api<{ rotation: number }>("/api/camera/view", "POST", { rotation: value });
+      const view = await api<{ rotation: number; effective_rotation?: number; metadata_warnings?: string[] }>("/api/camera/view", "POST", { rotation: value });
       setRotation(view.rotation);
+      setEffectiveRotation(view.effective_rotation ?? view.rotation);
       setNotice("Camera rotation saved. New recordings will use this orientation.");
+      setMetadataWarnings(view.metadata_warnings ?? []);
     } catch (error) {
       setNotice(message(error));
       await refresh();
@@ -281,6 +291,7 @@ function App() {
           "POST",
         );
         setRotation(result.rotation);
+        setEffectiveRotation(result.effective_rotation ?? result.rotation);
         setWorkers((items) =>
           items.map((item) =>
             item.id === worker.id
@@ -289,7 +300,7 @@ function App() {
           ),
         );
         setNotice(
-          result.finalizing
+          result.error ? result.error : result.finalizing
             ? "Finalizing recording. Please wait before starting another."
             : result.recording
             ? "MaixCAM recording started."
@@ -456,6 +467,18 @@ function App() {
           </div>
         </aside>
         <main>
+          {maintenance && (
+            <div className="inline-message" role="status" aria-label="Maintenance active">
+              <strong>Maintenance active. Recording is unavailable.</strong>
+              <p>{maintenance.error ?? `Owner: ${maintenance.owner}. Wait for the operation to finish. If it crashed, follow owner-specific recovery in scripts/README.md.`}</p>
+            </div>
+          )}
+          {metadataWarnings.length > 0 && (
+            <div className="inline-message" role="status" aria-label="Metadata warnings">
+              <strong>Optional metadata needs attention.</strong>
+              {metadataWarnings.map((warning) => <p key={warning}>{warning}</p>)}
+            </div>
+          )}
           {page === "Live Workers" && worker && (
             <>
               <div className="page-heading">
@@ -517,12 +540,12 @@ function App() {
                       <video
                         key={`${worker.id}-${retry}`}
                         ref={video}
-                        className={real && rotation % 180 ? "canvas-source" : undefined}
-                        data-rotation={real ? rotation : 0}
+                        className={real && effectiveRotation % 180 ? "canvas-source" : undefined}
+                        data-rotation={real ? effectiveRotation : 0}
                         style={real ? {
-                          width: rotation % 180 ? playerSize.height : "100%",
-                          height: rotation % 180 ? playerSize.width : "100%",
-                          transform: `translate(-50%, -50%) rotate(${-rotation}deg)`,
+                          width: effectiveRotation % 180 ? playerSize.height : "100%",
+                          height: effectiveRotation % 180 ? playerSize.width : "100%",
+                          transform: `translate(-50%, -50%) rotate(${-effectiveRotation}deg)`,
                         } : undefined}
                         src={real ? undefined : preferences.demoVideo}
                         autoPlay
@@ -533,8 +556,8 @@ function App() {
                           if (!real) setStreamState("Demo video unavailable");
                         }}
                       />
-                      {real && rotation % 180 !== 0 && <VideoPicture
-                        key={`picture-${worker.id}-${retry}`} source={video} rotation={rotation} />}
+                      {real && effectiveRotation % 180 !== 0 && <VideoPicture
+                        key={`picture-${worker.id}-${retry}`} source={video} rotation={effectiveRotation} />}
                       {real && <audio ref={returnAudio} autoPlay muted={muted} />}
                       {!online || streamState === "Demo video unavailable" ? (
                         <div className="video-empty">
@@ -722,7 +745,7 @@ function App() {
                           busy ||
                           (real &&
                             (!recordStatusKnown || !rotationKnown ||
-                              (!online && !worker.recording)))
+                              Boolean(maintenance) || (!online && !worker.recording)))
                         }
                         onClick={() => void toggleRecording()}
                       >
@@ -1004,7 +1027,7 @@ function Playback({
   const [portrait, setPortrait] = useState(false);
   const [paused, setPaused] = useState(false);
   const [position, setPosition] = useState(0);
-  const [length, setLength] = useState(recording.duration);
+  const [length, setLength] = useState(recording.duration ?? 0);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
   const [error, setError] = useState("");
@@ -1097,15 +1120,18 @@ function Playback({
   );
 }
 async function download(recording: Recording) {
-  const response = await fetch(recording.url);
-  if (!response.ok) throw new Error("Recording download failed.");
-  const blob = await response.blob();
-  const url = URL.createObjectURL(blob);
+  let url = recording.url;
+  if (recording.source === "demo") {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error("Recording download failed.");
+    url = URL.createObjectURL(await response.blob());
+  }
   const link = document.createElement("a");
   link.href = url;
   link.download = recording.filename;
   link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  if (recording.source === "demo")
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 function ConnectionSettings({
   preferences,

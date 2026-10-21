@@ -1,9 +1,159 @@
 # Project Brain and Index
 
 Read this file first when resuming work. It records current decisions and points
-to detailed evidence; session logs preserve the history. Last updated: 2026-10-17.
+to detailed evidence; session logs preserve the history. Last updated: 2026-10-21.
 
 ## Current State and User Decisions
+
+- **Final hardening redeployment (2026-10-21):** User authorized both devices.
+  Maintenance-safe forced deployment succeeded on camera 192.168.1.7 and PC
+  192.168.1.4; configuration unchanged. Clear 0/90 video, Talk signaling,
+  recording/portrait playback/seeking, native download with matching SHA256,
+  byte range and 60-second continuity (~20fps, zero reported loss) passed.
+  Docker healthy, rotation zero, recording idle and maintenance released.
+  Headset remained disconnected and return decode was silence; audible duplex
+  acceptance remains pending. No archival; rollback defect remains. See
+  [rollout evidence and limits](docs/sessions/2026-10-21-hardening-final-redeployment.md).
+
+- **Hardening remaining tasks (2026-10-21):** Completed sections 6–8 of
+  `harden-runtime-and-trim-obsolete-code` (22/22 implementation tasks): native
+  recording downloads, removal of retired camera padding and verified OpenSSH
+  guidance. Python: 198 passed, eight skipped; 44 browser checks passed, plus
+  isolated media, Linux boot and camera rotation checks. Implemented;
+  redeployment verification pending. Before rollout, archival or reviewing
+  skipped checks, read the [results and limits](docs/sessions/2026-10-21-hardening-remaining-tasks.md).
+
+- **P526 paired redeployment and duplex accepted (2026-10-21):** User requested
+  P526_5G and reported only PC-to-camera audio working. Persisted camera Wi-Fi
+  across reboot; redeployed both devices with camera 192.168.1.7 and PC/return
+  destination 192.168.1.4. Headset initially disconnected, then reconnected;
+  user confirmed both directions working. Docker healthy; real 60-second browser
+  continuity ~20fps, zero reported loss; return decode contains microphone data.
+  Final rotation 0, recording idle, maintenance released. Earlier hardening
+  rollout passed rotation/Talk/recording/playback, 198 Python checks (eight skips)
+  and 42 browser checks after a test-only HTTP mock correction. Rollback's known
+  port-format defect remains. Before further rollout/recovery, read the
+  [network, deployment and acceptance evidence](docs/sessions/2026-10-21-p526-redeployment.md).
+
+- **Legacy recording section 5 (2026-10-21):** Implemented tasks 5.1–5.2 of
+  `harden-runtime-and-trim-obsolete-code` (14/22 tasks). Failed/forced legacy
+  output is retained outside successful listings; API/UI report failure.
+  Final Python: 198 passed, eight skipped; all 42 browser checks passed.
+  Implemented; redeployment verification pending. Before legacy recovery or
+  rollout, read the [results and verification limits](docs/sessions/2026-10-21-legacy-recording-results.md).
+
+- **Recording maintenance section 4 (2026-10-21):** Implemented tasks 4.1–4.5
+  of `harden-runtime-and-trim-obsolete-code` (12/22 tasks). Persistent owner-bound
+  maintenance excludes capture across all five deployment/stop entry points;
+  nested calls share a host lock. Failed operations retain the marker; rollback
+  restores previous images stopped for explicit recovery. Python ran 199 tests
+  with eight skips; final Windows checks and all 36 browser checks passed.
+  Implemented; redeployment verification pending. Before maintenance recovery,
+  legacy bootstrap or rollout, read the
+  [maintenance evidence and limits](docs/sessions/2026-10-21-recording-maintenance-exclusion.md).
+
+- **Optional metadata section 3 (2026-10-21):** Implemented tasks 3.1–3.3 of
+  `harden-runtime-and-trim-obsolete-code` (7/22 tasks). Invalid view JSON falls
+  back to rotation zero; bad sidecars retain listed media with unknown duration.
+  Separate status/UI warnings provide recovery guidance. Python ran 189 tests
+  with eight skips; final focused checks and all 34 browser checks passed.
+  Implemented; redeployment verification pending. For recovery, skipped checks
+  and verification limits, read the
+  [metadata isolation session](docs/sessions/2026-10-21-optional-metadata-isolation.md).
+
+- **Talkback recovery sections 1–2 (2026-10-21):** Preserved local access
+  defaults and implemented identity-bound, idempotent failed-session cleanup
+  for `harden-runtime-and-trim-obsolete-code` (4/22 tasks). Retry no longer
+  needs the old browser's Stop; delayed cleanup cannot stop a new session.
+  Implemented; redeployment verification pending. For regressions, skipped
+  checks and rollout limits, read the
+  [session recovery evidence](docs/sessions/2026-10-21-talkback-session-recovery.md).
+
+- **Efficiency paired redeployment verified with limits (2026-10-21):** User
+  authorized both devices and SSH setup of `HCMUT-MEETING`. Fixed a proven
+  native-startup regression: launcher passes `auto_start`, now accepted/tested.
+  Saved Wi-Fi in `/boot` so reboot retains it. Final forced deployment passed;
+  Docker healthy, native RTSP 768x432/20fps, no camera FFmpeg/OpenCV/NumPy.
+  Real browser 60-second continuity (~19.8fps, zero reported packet loss),
+  headset return, TB3 Talk, 0/90 rotation and multistream recording/playback
+  passed. User confirmed both audio directions audible. Python rerun: 180 tests,
+  eight skips. Final rotation 0, recording idle. Performance is qualified:
+  final CPU idle 17–23% (below 55–65% target), 0% I/O wait, ~97MiB video VSZ;
+  FFmpeg recording decode emitted timestamp warnings despite clear playback.
+  Earlier failed deployment also exposed unresolved rollback port-format error;
+  snapshots retained. No archival or long-stability claim. See
+  [deployment evidence and remaining limits](docs/sessions/2026-10-21-efficiency-redeployment.md).
+
+- **Automated regression section 4 (2026-10-21):** Required checks for
+  `optimize-maixcam-cpu-and-video-transport` passed: Python ran 179 tests with
+  eight skips, all 32 source/compiled browser tests passed after the frontend
+  build, and Compose validation passed. Task 4.1 checked; tracked progress 6/6.
+  No application changes or deployment. Implemented; redeployment verification
+  pending, including live continuity and audio acceptance. See
+  [regression evidence and limits](docs/sessions/2026-10-21-automated-regression.md).
+
+- **In-process headset return section 3 (2026-10-21):** Implemented tasks
+  3.1–3.2 of `optimize-maixcam-cpu-and-video-transport`: camera direct UDP8004
+  PCMU encoding/packetization now runs in-process; explicit RTSP audio retains
+  FFmpeg. Added best-effort console printk/Wi-Fi power-save boot tuning before
+  SCO preparation. Focused sender/deployment checks and isolated Linux boot
+  checks passed; full Python suite ran 178 tests with eight skips, plus one
+  additional retry test passed. OpenSpec progress 5/6; section 4 remains pending.
+  Implemented; redeployment verification pending. No hardware performance or
+  audible improvement claimed. See [evidence and limits](docs/sessions/2026-10-21-in-process-headset-return.md).
+
+- **PC baseline orientation section 2 (2026-10-21):** Implemented task 2.1 of
+  `optimize-maixcam-cpu-and-video-transport`: optional `CAMERA_BASE_ROTATION`
+  combines with the saved manager angle for live display and copied-H.264 MP4
+  rotation. Manager selection persists independently. 170 Python tests ran
+  successfully (seven skips); 32 browser checks and Compose validation passed.
+  OpenSpec progress 3/6. Implemented; redeployment verification pending.
+  See [configuration and evidence](docs/sessions/2026-10-21-pc-baseline-orientation.md).
+
+- **Camera efficiency section 1 (2026-10-21):** User selected only tasks 1.1–1.2
+  of `optimize-maixcam-cpu-and-video-transport`. Added default native-bound
+  768x432/20fps RTSP and opt-in Python fallback with reusable rotation buffers,
+  NAL views and blocking queue waits. Native mode removes camera pixel rotation;
+  the separate PC baseline-offset task remains pending. No live deployment;
+  operational verification remains pending. See
+  [implementation evidence](docs/sessions/2026-10-21-camera-pipeline-section-one.md).
+
+- **Token-free live verification (2026-10-20):** User authorized paired
+  redeployment to verify operational completion. Both sides now run TB3; real
+  login, video, headset return, Talk, rotation and a new recording/playback passed
+  short checks. User confirmed audible PC-to-headset speech. Follow-up sustained
+  video froze; a scoped video restart then failed with a camera read timeout.
+  Normal reboot restored service and a final 30-second browser check passed
+  (370 decoded frames); headset return and Talk were available, rotation 0 and
+  recording idle. The intermittent camera fault remains unresolved, so overall
+  acceptance is qualified. See
+  [live deployment evidence](docs/sessions/2026-10-20-token-free-live-verification.md)
+  for recovery actions and the actual final runtime state. Tests do not override
+  this live failure.
+
+- **Completion principle (2026-10-20):** The user defines completion by the
+  system running successfully after redeployment. Automated tests are supporting
+  diagnostics, not proof of completion. Apply the completion rule below.
+
+- **Token removal implementation (2026-10-20):** Applied
+  `remove-local-network-token-auth`: token-free TB3 runtime/control, paired
+  deployment and inspected old-runtime recovery snapshots; admin login retained.
+  Source implementation is ready; the later authorized live deployment is
+  recorded above. Operational completion awaits reliable video verification.
+  Verification results and remaining limits are recorded in the
+  [implementation session](docs/sessions/2026-10-20-token-removal-implementation.md).
+  No live deployment is part of this apply request. The two pending plans now
+  follow this decision and defer additional Host/Origin hardening. The original
+  [proposal session](docs/sessions/2026-10-20-token-removal-proposal.md) remains
+  historical evidence.
+
+- **Runtime audit and repair proposal (2026-10-20):** User requested a whole-repo
+  audit and OpenSpec solution. Eight concrete findings and the validated
+  `harden-runtime-and-trim-obsolete-code` plan are ready; implementation has not
+  started. For the findings, scope and verification limits, read the
+  [audit/proposal session](docs/sessions/2026-10-20-runtime-audit-proposal.md).
+  Application code and live services were unchanged; preserve the separate
+  pending desktop-setup proposal.
 
 - **Nontechnical Windows README (2026-10-17):** User requested self-service
   redeployment instructions with PowerShell bypass included. Root README now
@@ -444,10 +594,23 @@ Match existing code: four-space Python indentation, two-space TypeScript indenta
 
 Use Python `unittest` with `test_*.py` files and `test_*` methods; use Playwright `*.spec.ts` files for browser behavior. Mock hardware and media services in automated tests. No numeric coverage threshold is configured. Add regression coverage for changed behavior; document physical-device checks separately.
 
+## Completion Rule
+
+For runtime changes, completion means the system works after redeployment.
+Automated tests are supplementary diagnostics; passing tests, builds or task
+checkboxes alone never establishes completion. Run tests after implementation.
+Redeploy the affected PC/camera components within the authorized scope, then
+verify startup and the affected real workflows: picture, listening, Talk,
+rotation and recording as applicable. Report audible acceptance separately
+when it needs the user's confirmation. If redeployment is not authorized or
+cannot be verified, report "implemented; redeployment verification pending"
+and keep overall completion pending. Documentation-only changes need no deployment.
+
 ## Commit & Pull Request Guidelines
+
 
 History uses short descriptive subjects without a consistent prefix scheme. Write imperative subjects, such as `Fix headset reconnect handling`. PRs should explain behavior changes, list validation commands/results, link relevant issues, and include screenshots for UI changes. Document hardware requirements when applicable.
 
 ## Security & Configuration
 
-Keep PC and camera talkback tokens synchronized without exposing their values in logs or reviews. Treat frontend login as a prototype, not API authorization. Configure camera addressing through `MAIX_IP`; keep recordings and generated runtime files out of commits.
+Use token-free TB3 only on the trusted LAN; update PC and camera together. Keep optional legacy rollback tokens private and out of logs/reviews. Treat frontend login as a prototype, not API authorization. Configure camera addressing through `MAIX_IP`; keep recordings and generated runtime files out of commits.

@@ -1,6 +1,5 @@
 """Bluetooth headset status and fixed-device binding on MaixCAM."""
 
-import hmac
 import json
 import os
 import re
@@ -112,26 +111,17 @@ class BluetoothControl:
                 "fixed": bool(self.fixed_mac)}
 
 
-def make_handler(control, token):
+def make_handler(control):
     class Handler(BaseHTTPRequestHandler):
         def _json(self, code, value):
-            data = json.dumps(value).encode()
+            data = json.dumps({**value, "talkback_protocol": "TB3"}).encode()
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
 
-        def _authorized(self):
-            supplied = self.headers.get("X-Control-Token", "")
-            if not hmac.compare_digest(supplied, token):
-                self._json(403, {"error": "unauthorized"})
-                return False
-            return True
-
         def do_GET(self):
-            if not self._authorized():
-                return
             if self.path == "/bluetooth/clock":
                 return self._json(200, {"time_ms": int(time.time() * 1000)})
             if self.path == "/bluetooth/status":
@@ -139,8 +129,6 @@ def make_handler(control, token):
             self._json(404, {"error": "not found"})
 
         def do_POST(self):
-            if not self._authorized():
-                return
             try:
                 if self.path == "/bluetooth/scan":
                     return self._json(200, {"devices": control.scan(), **control.status()})
@@ -149,6 +137,8 @@ def make_handler(control, token):
                     if size < 1 or size > 256:
                         raise ValueError("invalid selection body")
                     body = json.loads(self.rfile.read(size))
+                    if not isinstance(body, dict):
+                        raise ValueError("invalid selection body")
                     return self._json(200, control.select(body.get("mac")))
             except (ValueError, TypeError, json.JSONDecodeError) as error:
                 return self._json(400, {"error": str(error)})
@@ -159,5 +149,5 @@ def make_handler(control, token):
     return Handler
 
 
-def serve(control, token, port=8765):
-    ThreadingHTTPServer(("0.0.0.0", port), make_handler(control, token)).serve_forever()
+def serve(control, port=8765):
+    ThreadingHTTPServer(("0.0.0.0", port), make_handler(control)).serve_forever()

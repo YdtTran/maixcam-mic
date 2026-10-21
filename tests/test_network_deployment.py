@@ -11,6 +11,48 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(os.name == "nt", "Windows PowerShell networking")
 class NetworkDeploymentTests(unittest.TestCase):
+    def test_host_lock_nested_calls_competing_process_and_explicit_recovery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'compete.ps1').write_text(r'''
+$ErrorActionPreference='Stop'
+Import-Module '__MODULE__' -DisableNameChecking
+try { Enter-ProjectMaintenance '__ROOT__'; throw 'Competing process entered' }
+catch { if ($_.Exception.Message -notlike '*Another project maintenance*') { throw }; 'COMPETITOR_REFUSED' }
+'''.replace('__MODULE__', str(ROOT / 'scripts/NetworkDeployment.psm1')).replace('__ROOT__', str(root)))
+            (root / 'nested.ps1').write_text(r'''
+$ErrorActionPreference='Stop'
+Import-Module '__MODULE__' -DisableNameChecking
+$nested = Enter-ProjectMaintenance '__ROOT__'
+if ($nested.Outer) { throw 'Child acquired outer ownership' }
+Exit-ProjectMaintenance $nested $true
+'NESTED_OK'
+'''.replace('__MODULE__', str(ROOT / 'scripts/NetworkDeployment.psm1')).replace('__ROOT__', str(root)))
+            self.run_ps(r'''
+& $module { function script:Get-MaintenanceOperator { return 'stopped' } }
+$root = '__ROOT__'
+$context = Enter-ProjectMaintenance $root -StopOnly
+$marker = Join-Path $root 'recordings/.maintenance.json'
+$shell = Join-Path $PSHOME 'powershell.exe'
+try {
+    $nested = Enter-ProjectMaintenance $root
+    if ($nested.Outer -or $nested.Owner -cne $context.Owner) { throw 'Nested ownership changed' }
+    Exit-ProjectMaintenance $nested $true
+    if (-not (Test-Path $marker)) { throw 'Nested call released marker' }
+    $result = Invoke-NetworkProcess $shell @('-NoProfile','-File',(Join-Path $root 'nested.ps1'))
+    if ($result.Trim() -ne 'NESTED_OK') { throw 'Child did not share maintenance' }
+    $result = Invoke-NetworkProcess $shell @('-NoProfile','-File',(Join-Path $root 'compete.ps1')) -Environment @{WORKERCAM_MAINTENANCE_OWNER=''}
+    if ($result.Trim() -ne 'COMPETITOR_REFUSED') { throw 'Competing process entered' }
+} finally { Exit-ProjectMaintenance $context $false }
+try { Enter-ProjectMaintenance $root -StopOnly; throw 'Stale owner was replaced' }
+catch { if ($_.Exception.Message -notlike '*Maintenance marker retained*') { throw } }
+try { Enter-ProjectMaintenance $root -RecoverOwner ('b' * 32); throw 'Foreign owner recovered' }
+catch { if ($_.Exception.Message -notlike '*Maintenance marker retained*') { throw } }
+$recovery = Enter-ProjectMaintenance $root -RecoverOwner $context.Owner -StopOnly
+Exit-ProjectMaintenance $recovery $true
+if (Test-Path $marker) { throw 'Recovery failed to release marker' }
+'''.replace('__ROOT__', str(root)))
+
     def run_ps(self, body, timeout=20):
         script = "$ErrorActionPreference='Stop'\n"
         script += f"$module = Import-Module '{ROOT / 'scripts/NetworkDeployment.psm1'}' -Force -PassThru -DisableNameChecking\n"
@@ -136,10 +178,32 @@ try {
 param($MaixHost,$PcIp,$HeadsetMac,$AudioProfile,[switch]$Reboot,$DeploymentId)
 Add-Content -LiteralPath (Join-Path $PSScriptRoot '.runtime/actions') 'CAMERA_DEPLOY'
 ''')
+        (root / 'pc/talkback_protocol.py').write_text('# fixture protocol\n')
         (root / '.env').write_text('MAIX_IP=192.0.2.8\nMAIX_USB_IP=10.9.8.1\nOTHER=preserved\n')
-        (root / '.talkback_token').write_text('00' * 16)
         with (root / 'scripts/NetworkDeployment.psm1').open('a') as module:
             module.write(r'''
+function Invoke-MaintenanceDocker {
+    param([string[]]$Arguments)
+    $call = $Arguments -join ' '
+    $marker = Join-Path (Get-Location) 'recordings/.maintenance.json'
+    if ($call -like '*ps --all --quiet server*') { return 'fixture-container' }
+    if ($call -like '*inspect --format*') { return 'running' }
+    if ($call -like '*exec -T server python*') {
+        if ($env:NETWORK_TEST_CASE -eq 'recording') { return '{"recording":true}' }
+        if ($call -like '*/api/maintenance/begin*') {
+            if ($call -notmatch "owner='([a-f0-9]{32})'") { throw 'Missing owner' }
+            [void](New-Item -ItemType Directory -Path (Split-Path $marker) -Force)
+            [IO.File]::WriteAllText($marker, (@{owner=$Matches[1]} | ConvertTo-Json))
+        }
+        if ($call -like '*/api/maintenance/end*') {
+            if ($env:NETWORK_TEST_CASE -eq 'release-failed') { throw 'Simulated maintenance release failure' }
+            Remove-Item -LiteralPath $marker
+        }
+        $maintenance = if (Test-Path -LiteralPath $marker) { Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json } else { $null }
+        return (@{recording=$false;finalizing=$false;maintenance=$maintenance} | ConvertTo-Json -Compress)
+    }
+    return ''
+}
 function Get-DeploymentInterfaces {
     [pscustomobject]@{Kind='Wifi';Index=18;Address='192.0.2.2';PrefixLength=24;Name='Wi-Fi'}
     [pscustomobject]@{Kind='Usb';Index=17;Address='10.9.8.2';PrefixLength=24;Name='USB'}
@@ -153,7 +217,27 @@ function Invoke-MaixSsh {
     if ($Command -like '*import glob*') {
         return '{"model":"MaixCAM","wifi":[{"ip":"192.0.2.1","mac":"ab:cd:ef:01:23:45"}],"settings":{"PC_IP":"192.0.2.2","HEADSET_MAC":"aA:bB:cC:dD:eE:fF","AUDIO_PROFILE":"sco"}}'
     }
-    if ($Command -like '*backup=/root*') { Add-Content '.runtime/actions' 'CAMERA_ROLLBACK' }
+    if ($Command -like '*hashlib,json,pathlib,re*') {
+        if ($env:NETWORK_TEST_CASE -like 'legacy-*') {
+            $sha = [Security.Cryptography.SHA256]::Create()
+            try { $digest = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes(('00' * 16)))).Replace('-', '').ToLowerInvariant() }
+            finally { $sha.Dispose() }
+            return (@{legacy=$true;digest=$digest} | ConvertTo-Json)
+        }
+        return '{"legacy":false,"digest":null}'
+    }
+    if ($Command -like '*talkback_protocol.PROTOCOL_VERSION*') { return 'TB3' }
+    if ($Command -like '*hashlib.sha256(pathlib*') {
+        $text = [IO.File]::ReadAllText((Join-Path (Get-Location) 'pc/talkback_protocol.py')).Replace("`r`n", "`n")
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { return [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text))).Replace('-', '') }
+        finally { $sha.Dispose() }
+    }
+    if ($Command -like '*p.unlink*') {
+        Add-Content '.runtime/actions' 'CAMERA_TOKEN_CLEANUP'
+        if ($env:NETWORK_TEST_CASE -eq 'cleanup-failed') { throw 'Permission denied' }
+    }
+    if ($Command -like '*backup=__*' -or $Command -like '*backup=/root*') { Add-Content '.runtime/actions' 'CAMERA_ROLLBACK' }
     return ''
 }
 function Invoke-NetworkProcess {
@@ -161,35 +245,75 @@ function Invoke-NetworkProcess {
     $call = $Arguments -join ' '
     if ($call -like '*stop_docker_pc.ps1*' -and $env:NETWORK_TEST_CASE -eq 'recording') { throw 'Stop the recording first' }
     if ($call -like '*stop_docker_pc.ps1*' -and $call -notlike '*-CheckOnly*') {
-        Add-Content '.runtime/actions' 'PC_RETURN_RECOVERY'
+        Add-Content '.runtime/actions' 'PC_STOP'
         Set-Content '.runtime/return-recovered' 'yes'
     }
     if ($call -like '*deploy_pc.ps1*' -and $call -like '*-Build*') {
         Add-Content '.runtime/actions' 'PC_DEPLOY'
-        if ($env:NETWORK_TEST_CASE -eq 'pc-failed') { throw 'Simulated Docker build failure' }
+        if ($env:NETWORK_TEST_CASE -in @('pc-failed','legacy-failed','legacy-missing-failed','legacy-malformed-failed','legacy-mismatched-failed')) { throw 'Simulated Docker build failure' }
     }
     if ($FilePath -ne 'docker.exe') { return '' }
-    if ($call -like '*ffmpeg*headsetmic*' -and $env:NETWORK_TEST_CASE -eq 'headset-once' -and -not (Test-Path '.runtime/return-recovered')) { throw 'Server returned 404 Not Found' }
+    if ($call -like '*--force-recreate*--no-deps*server*') {
+        Add-Content '.runtime/actions' 'UDP_RECREATE'
+    }
+    if ($call -like '*ffmpeg*headsetmic*' -and $env:NETWORK_TEST_CASE -eq 'headset-once' -and -not (Test-Path '.runtime/headset-retried')) { Set-Content '.runtime/headset-retried' 'yes'; throw 'Server returned 404 Not Found' }
     if ($Arguments[0] -eq 'info') { return 'linux' }
+    if ($Arguments[0] -eq 'cp' -and $env:NETWORK_TEST_CASE -eq 'legacy-retained') {
+        if (Test-Path -LiteralPath $Arguments[2] -PathType Container) {
+            [IO.File]::WriteAllText((Join-Path $Arguments[2] 'preserved.mp4'), 'old-recording-fixture')
+        } else { [IO.File]::WriteAllText($Arguments[2], ('00' * 16)) }
+        return ''
+    }
     if ($call -like '*config --format json*') { return '{"services":{"server":{"command":["python","--maix-ip","192.0.2.1"],"environment":{"MAIX_USB_IP":"10.9.8.1"}}}}' }
     if ($call -like '*ps *') { return 'fixture-container' }
     if ($Arguments[0] -eq 'inspect') {
-        if ($call -like '*State.Running*') { return 'true' }
-        if ($call -like '*Image*') { return 'old-image-id' }
-        return '[{"State":{"Health":{"Status":"healthy"}},"Config":{"Cmd":["192.0.2.1"]}}]'
+        $mounts = @()
+        $isPrevious = -not (Test-Path '.runtime/actions') -or -not ((Get-Content '.runtime/actions') -contains 'PC_DEPLOY')
+        if ($isPrevious -and $env:NETWORK_TEST_CASE -like 'legacy-*') {
+            $tokenSource = if ($env:NETWORK_TEST_CASE -eq 'legacy-retained') { '.removed-token' } else { '.talkback_token' }
+            $mounts = @(@{Type='bind';Source=(Join-Path (Get-Location) $tokenSource);Destination='/app/.talkback_token';RW=$false})
+            if ($env:NETWORK_TEST_CASE -eq 'legacy-retained') {
+                $mounts += @{Type='bind';Source=(Join-Path (Get-Location) '.removed-recordings');Destination='/app/recordings';RW=$true}
+            }
+        }
+        return (ConvertTo-Json -Depth 12 -InputObject @(@{Id='fixture-container';Image='old-image-id';State=@{Running=$true;Health=@{Status='healthy'}};
+            Config=@{Cmd=@('python','--maix-ip','192.0.2.1');Env=@('ORIGINAL=kept');Entrypoint=$null;WorkingDir='/app';User='';Healthcheck=$null};
+            Mounts=@($mounts);HostConfig=@{PortBindings=@{'8000/tcp'=@(@{HostIp='127.0.0.1';HostPort='8000'})};RestartPolicy=@{Name='unless-stopped'};LogConfig=@{Type='json-file';Config=@{'max-size'='10m'}};Init=$true}}))
     }
-    if ($call -like '*rollback.compose.yaml*') { Add-Content '.runtime/actions' 'PC_ROLLBACK' }
+    if ($call -like '*rollback.compose.json*') {
+        if ($call -notlike '* create --no-build server') { throw 'Rollback must restore the previous image stopped' }
+        Add-Content '.runtime/actions' 'PC_ROLLBACK'
+        if ($call -like '*compose.yaml*') { throw 'Rollback used new configuration' }
+    }
     return ''
+}
+function Test-HostUdpListeners {
+    param($Ports)
+    if ($env:NETWORK_TEST_CASE -eq 'udp-missing') { return $false }
+    if ($env:NETWORK_TEST_CASE -eq 'udp-recovered') {
+        if (Test-Path '.runtime/actions') {
+            if ((Get-Content '.runtime/actions') -contains 'UDP_RECREATE') { return $true }
+        }
+        return $false
+    }
+    return $true
 }
 Export-ModuleMember -Function *
 ''')
         (root / 'run.ps1').write_text(r'''
 $ErrorActionPreference='Stop'
 function docker.exe {}
+function Get-NetTCPConnection { return }
 function Invoke-RestMethod {
     param($Uri,$TimeoutSec)
     if ($Uri -like '*diagnostics') { return [pscustomobject]@{media_ip='192.0.2.1';wifi=@{reachable=$true}} }
-    return [pscustomobject]@{available=$true;error=$null}
+    if ($Uri -like '*/api/bluetooth/status') { return [pscustomobject]@{selected='aA:bB:cC:dD:eE:fF';error=$null} }
+    if ($Uri -like '*:8765/bluetooth/status') {
+        $protocol = if ($env:NETWORK_TEST_CASE -eq 'mixed-camera') { 'TB2' } else { 'TB3' }
+        return [pscustomobject]@{talkback_protocol=$protocol}
+    }
+    $protocol = if ($env:NETWORK_TEST_CASE -eq 'mixed-pc') { 'TB2' } else { 'TB3' }
+    return [pscustomobject]@{available=$true;error=$null;protocol=$protocol}
 }
 & (Join-Path $PSScriptRoot 'scripts/deploy.ps1') @args
 exit $LASTEXITCODE
@@ -210,6 +334,19 @@ exit $LASTEXITCODE
             self.assertFalse((root / '.runtime/actions').exists())
             self.assertFalse((root / '.runtime/deploy-state.json').exists())
             self.assertNotIn('SUCCESS', result.stdout)
+            self.assertFalse((root / '.talkback_token').exists())
+            self.assertFalse((root / '.runtime/mutation.lock').exists())
+            self.assertFalse((root / 'recordings/.maintenance.json').exists())
+
+    def test_release_failure_keeps_marker_and_does_not_claim_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.deployment_fixture(root)
+            result = self.run_deployment(root, 'release-failed')
+            self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
+            self.assertTrue((root / 'recordings/.maintenance.json').exists())
+            self.assertIn('Maintenance release failed', result.stdout)
+            self.assertNotIn('Deployment completed successfully', result.stdout)
 
     def test_deployment_is_idempotent_and_force_redeploys(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -240,7 +377,7 @@ exit $LASTEXITCODE
             self.deployment_fixture(root)
             original = (root / '.env').read_bytes()
             result = self.run_deployment(root, 'pc-failed')
-            self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+            self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
             self.assertEqual((root / '.env').read_bytes(), original)
             actions = (root / '.runtime/actions').read_text()
             self.assertIn('CAMERA_ROLLBACK', actions)
@@ -254,7 +391,130 @@ exit $LASTEXITCODE
             result = self.run_deployment(root, 'headset-once')
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('refresh Docker UDP forwarding', result.stdout)
-            self.assertEqual((root / '.runtime/actions').read_text().count('PC_RETURN_RECOVERY'), 1)
+            self.assertEqual((root / '.runtime/actions').read_text().count('PC_STOP'), 2)
+
+    def test_legacy_snapshot_restores_inspected_mount_and_image(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.deployment_fixture(root)
+            secret = '00' * 16
+            (root / '.talkback_token').write_text(secret)
+            result = self.run_deployment(root, 'legacy-failed')
+            self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
+            snapshot = next((root / '.runtime/deploy-backups').glob('*/rollback.compose.json'))
+            service = json.loads(snapshot.read_text())['services']['server']
+            self.assertEqual(service['image'], 'old-image-id')
+            self.assertEqual(service['environment'], {'ORIGINAL': 'kept'})
+            self.assertEqual(service['logging']['options']['max-size'], '10m')
+            self.assertEqual(service['ports'][0]['host_ip'], '127.0.0.1')
+            mount = service['volumes'][0]
+            self.assertEqual(mount['target'], '/app/.talkback_token')
+            self.assertTrue(mount['read_only'])
+            self.assertEqual(Path(mount['source']).read_text(), secret)
+            self.assertNotEqual(Path(mount['source']), root / '.talkback_token')
+            self.assertIn('PC_ROLLBACK', (root / '.runtime/actions').read_text())
+            self.assertIn('restored stopped', result.stdout)
+            self.assertTrue((root / 'recordings/.maintenance.json').exists())
+            self.assertNotIn(secret, result.stdout + result.stderr)
+
+    def test_missing_or_malformed_legacy_material_allows_upgrade_but_reports_rollback(self):
+        for case, content, expected in (('legacy-missing', None, 0), ('legacy-malformed', 'bad', 0), ('legacy-mismatched', '11' * 16, 0),
+                                         ('legacy-missing-failed', None, 6), ('legacy-malformed-failed', 'bad', 6), ('legacy-mismatched-failed', '11' * 16, 6)):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.deployment_fixture(root)
+                if content is not None:
+                    (root / '.talkback_token').write_text(content)
+                result = self.run_deployment(root, case)
+                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                self.assertIn('talkback recovery unavailable', result.stdout)
+                if expected:
+                    self.assertIn('ROLLBACK INCOMPLETE', result.stdout)
+                    self.assertNotIn('PC_ROLLBACK', (root / '.runtime/actions').read_text())
+
+    def test_mixed_versions_trigger_pair_recovery_before_cleanup(self):
+        for case in ('mixed-camera', 'mixed-pc'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.deployment_fixture(root)
+                (root / '.talkback_token').write_text('legacy-ignored')
+                result = self.run_deployment(root, case)
+                self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
+                actions = (root / '.runtime/actions').read_text()
+                self.assertIn('CAMERA_ROLLBACK', actions)
+                self.assertIn('PC_ROLLBACK', actions)
+                self.assertNotIn('CAMERA_TOKEN_CLEANUP', actions)
+                self.assertTrue((root / '.talkback_token').exists())
+
+    def test_successful_migration_retains_private_copy_before_active_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.deployment_fixture(root)
+            (root / '.talkback_token').write_text('00' * 16)
+            result = self.run_deployment(root, 'legacy-ready')
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            saved = next((root / '.runtime/deploy-backups').glob('*/.talkback_token'))
+            self.assertEqual(saved.read_text(), '00' * 16)
+            self.assertFalse((root / '.talkback_token').exists())
+            self.assertIn('CAMERA_TOKEN_CLEANUP', (root / '.runtime/actions').read_text())
+
+    def test_retained_container_token_is_saved_when_original_checkout_is_gone(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.deployment_fixture(root)
+            result = self.run_deployment(root, 'legacy-retained')
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            saved = next((root / '.runtime/deploy-backups').glob('*/.talkback_token'))
+            self.assertEqual(saved.read_text(), '00' * 16)
+            self.assertNotIn('recovery unavailable', result.stdout)
+            self.assertEqual((saved.parent / 'recordings/preserved.mp4').read_text(), 'old-recording-fixture')
+
+    def test_cleanup_follows_verification_and_cannot_fail_startup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.deployment_fixture(root)
+            (root / '.talkback_token').write_text('ignored')
+            result = self.run_deployment(root, 'cleanup-failed')
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('cleanup failed', result.stdout)
+            self.assertIn('SUCCESS', result.stdout)
+            actions = (root / '.runtime/actions').read_text()
+            self.assertLess(actions.index('PC_STOP'), actions.index('CAMERA_DEPLOY'))
+            self.assertLess(actions.index('PC_DEPLOY'), actions.index('CAMERA_TOKEN_CLEANUP'))
+            self.assertTrue((root / '.talkback_token').exists())
+
+
+    def test_host_udp_listener_detection(self):
+        self.run_ps(r'''
+& $module {
+    function Get-NetUDPEndpoint {
+        param($LocalPort)
+        if ($LocalPort -eq 8004) { return [pscustomobject]@{LocalPort=8004} }
+        return
+    }
+    if (-not (Test-HostUdpListeners -Ports @(8004))) { throw 'Expected 8004 to be detected' }
+    if (Test-HostUdpListeners -Ports @(8004, 8005)) { throw 'Expected missing 8005 to fail' }
+}
+''')
+
+    def test_missing_host_udp_listener_triggers_recreate_and_recovers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.deployment_fixture(root)
+            result = self.run_deployment(root, 'udp-recovered')
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('host UDP listeners verified', result.stdout)
+            actions = (root / '.runtime/actions').read_text()
+            self.assertIn('UDP_RECREATE', actions)
+
+    def test_missing_host_udp_listener_fails_when_unrecovered(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.deployment_fixture(root)
+            result = self.run_deployment(root, 'udp-missing')
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('UDP listener 8004/8005 remains missing', result.stdout + result.stderr)
 
 
 if __name__ == '__main__':

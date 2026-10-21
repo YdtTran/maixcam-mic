@@ -60,6 +60,9 @@ mocks unavailable camera APIs and uses Worker #12's demo. No device is contacted
   it does not record the physical device.
   An embedded synthetic warehouse clip works offline. To regenerate it, install
   Playwright Chromium and FFmpeg, then run `node scripts/create-demo.mjs`.
+- Real recording downloads use the browser's native file download with the
+  recording filename, without buffering the whole file in an application Blob.
+  Playback still uses the same byte-range file route for seeking.
 - Settings stores WHEP and demo video URLs locally and retains real Bluetooth
   scan/select controls. Browser microphone capture publishes
   a WebRTC audio track through WHIP while Talk is held; the PC resamples to 8 kHz PCM16 for the camera.

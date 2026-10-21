@@ -1,21 +1,21 @@
 import unittest
-import shutil
 import socket
 import struct
-import subprocess
 
-from maix.headset_mic_stream import capture_command, publisher_command
+from maix.headset_mic_stream import RtpPcmUlawSender, capture_command, publisher_command
 
 
 class HeadsetMicStreamTests(unittest.TestCase):
-    @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg required for RTP packet check")
     def test_direct_rtp_emits_twenty_millisecond_g711_frames(self):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver:
             receiver.bind(("127.0.0.1", 0))
             receiver.settimeout(2)
-            command = publisher_command("127.0.0.1", receiver.getsockname()[1])
-            result = subprocess.run(command, input=bytes(320 * 20), capture_output=True, timeout=10)
-            self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+            sender = RtpPcmUlawSender("127.0.0.1", receiver.getsockname()[1])
+            try:
+                sender.send(bytes(320))
+                sender.send(bytes(320))
+            finally:
+                sender.close()
             first = receiver.recv(2048)
             second = receiver.recv(2048)
             self.assertEqual(first[0] >> 6, 2)

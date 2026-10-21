@@ -14,6 +14,7 @@ import app
 from pc.operator_server import RecordingManager, make_handler
 from pc.talkback import TalkbackRelay
 from pc.talkback_protocol import decode
+from maix.talkback_receiver import TalkbackReceiver
 
 
 @unittest.skipUnless(os.environ.get("UDP_INTEGRATION") == "1", "set UDP_INTEGRATION=1 with MediaMTX fixture running")
@@ -22,26 +23,26 @@ class UdpIntegrationTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         transport = os.environ.get("RTSP_TRANSPORT", "udp")
         self.assertIn(transport, ("udp", "tcp"))
-        token = b"i" * 16
         with tempfile.TemporaryDirectory() as directory, socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
             udp.bind(("127.0.0.1", 0))
             udp.settimeout(0.1)
             packets = []
+            receiver = TalkbackReceiver(duplex=True)
             closing = threading.Event()
 
             def collect():
                 while not closing.is_set():
                     try:
                         packet, _ = udp.recvfrom(2048)
-                        payload = decode(packet, token)
-                        if payload:
+                        payload = decode(packet)
+                        if payload and receiver.accept(packet):
                             packets.append(payload)
                     except socket.timeout:
                         pass
 
             collector = threading.Thread(target=collect)
             collector.start()
-            relay = TalkbackRelay(token, udp.getsockname(), relay_http="http://127.0.0.1:18889",
+            relay = TalkbackRelay(udp.getsockname(), relay_http="http://127.0.0.1:18889",
                                   relay_rtsp="rtsp://127.0.0.1:18554", transport=transport)
             manager = RecordingManager(directory, source="rtsp://127.0.0.1:18554/maix01", transport=transport, recording_mode="legacy")
             server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(manager, talkback=relay))
@@ -85,7 +86,7 @@ class UdpIntegrationTests(unittest.TestCase):
                 self.assertTrue(all(len(packet[1]) == 320 for packet in audio))
                 self.assertTrue(any(packet[0] == "stop" for packet in packets))
                 print(result.stdout.strip())
-                print(f"Received {len(audio)} authenticated 20ms UDP talkback frames; MP4 decoded successfully")
+                print(f"Received {len(audio)} TB3 20ms UDP talkback frames; MP4 decoded successfully")
             finally:
                 if manager.status()["recording"]:
                     manager.stop()

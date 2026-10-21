@@ -75,15 +75,15 @@ class TransportTests(unittest.TestCase):
             manager._close_process()
 
     def test_talkback_transport_changes_only_rtsp_decoder(self):
-        relay = TalkbackRelay(b"t" * 16, ("192.0.2.1", 9002), udp_socket=Mock(), transport="tcp")
+        relay = TalkbackRelay(("192.0.2.1", 9002), udp_socket=Mock(), transport="tcp")
         process = Mock()
-        cancel = threading.Event()
+        cancel = relay.cancel
         def end_stream(*args):
             cancel.set()
             return b""
         process.stdout.read.side_effect = end_stream
         relay.spawn = Mock(return_value=process)
-        relay._decode(cancel)
+        relay._decode(cancel, relay.session)
         command = relay.spawn.call_args.args[0]
         self.assertEqual(command[command.index("-rtsp_transport") + 1], "tcp")
         self.assertEqual(relay.target, ("192.0.2.1", 9002))
@@ -100,6 +100,144 @@ class TransportTests(unittest.TestCase):
                                '[aost#0:1/opus] muxer <- latency(total:1.5ms, demux-mux: 1.5ms)')
         self.assertEqual(timing["ffmpeg_reported_processing_ms"]["video"]["median"], .25)
         self.assertEqual(timing["ffmpeg_reported_processing_ms"]["audio"]["p95"], 1.5)
+
+    def test_running_publisher_taking_10_to_18s_is_not_terminated_prematurely(self):
+        relay_proc = Mock()
+        relay_proc.poll.return_value = None
+        pub_proc = Mock()
+        pub_proc.poll.return_value = None
+
+        stopped_processes = []
+        spawn_calls = []
+
+        def mock_spawn(cmd, **kwargs):
+            spawn_calls.append(cmd)
+            if len(spawn_calls) == 1:
+                return relay_proc
+            return pub_proc
+
+        current_time = 100.0
+        def mock_monotonic():
+            return current_time
+
+        server = Mock()
+        loop_iterations = 0
+        def mock_handle_request():
+            nonlocal current_time, loop_iterations
+            loop_iterations += 1
+            if loop_iterations == 1:
+                current_time = 112.0  # 12s elapsed
+                self.assertNotIn(pub_proc, stopped_processes)
+            elif loop_iterations == 2:
+                current_time = 118.0  # 18s elapsed
+                self.assertNotIn(pub_proc, stopped_processes)
+            else:
+                raise KeyboardInterrupt
+
+        server.handle_request.side_effect = mock_handle_request
+
+        with patch("app.shutil.which", return_value="ffmpeg"), \
+             patch("app.stop_process", side_effect=lambda p: stopped_processes.append(p)), \
+             patch("time.monotonic", side_effect=mock_monotonic):
+            args = app.parse_args(["--rtsp-transport", "tcp", "--stream-mode", "video", "--recordings", "recordings"])
+            app.run(args, spawn=mock_spawn, wait_for_relay=Mock(), server_factory=lambda addr, handler: server,
+                    camera_probe=Mock(return_value={"verified": True}), stop_existing=Mock(),
+                    path_available=Mock(return_value=False))
+
+        # spawn called only twice: relay and initial publisher (no premature restart)
+        self.assertEqual(len(spawn_calls), 2)
+
+    def test_publisher_restarts_when_stalled_beyond_20s_grace_period(self):
+        relay_proc = Mock()
+        relay_proc.poll.return_value = None
+        pub1 = Mock()
+        pub1.poll.return_value = None
+        pub2 = Mock()
+        pub2.poll.return_value = None
+
+        stopped_processes = []
+        spawn_calls = []
+
+        def mock_spawn(cmd, **kwargs):
+            spawn_calls.append(cmd)
+            if len(spawn_calls) == 1:
+                return relay_proc
+            if len(spawn_calls) == 2:
+                return pub1
+            return pub2
+
+        current_time = 100.0
+        def mock_monotonic():
+            return current_time
+
+        server = Mock()
+        loop_iterations = 0
+        def mock_handle_request():
+            nonlocal current_time, loop_iterations
+            loop_iterations += 1
+            if loop_iterations == 1:
+                current_time = 121.0  # > 20s elapsed (stalled)
+            else:
+                raise KeyboardInterrupt
+
+        server.handle_request.side_effect = mock_handle_request
+
+        with patch("app.shutil.which", return_value="ffmpeg"), \
+             patch("app.stop_process", side_effect=lambda p: stopped_processes.append(p)), \
+             patch("time.monotonic", side_effect=mock_monotonic):
+            args = app.parse_args(["--rtsp-transport", "tcp", "--stream-mode", "video", "--recordings", "recordings"])
+            app.run(args, spawn=mock_spawn, wait_for_relay=Mock(), server_factory=lambda addr, handler: server,
+                    camera_probe=Mock(return_value={"verified": True}), stop_existing=Mock(),
+                    path_available=Mock(return_value=False))
+
+        self.assertIn(pub1, stopped_processes)
+        self.assertEqual(len(spawn_calls), 3)
+
+    def test_publisher_restarts_fast_when_process_exits_early(self):
+        relay_proc = Mock()
+        relay_proc.poll.return_value = None
+        pub1 = Mock()
+        pub1.poll.return_value = 1  # Exited early at 3s
+        pub2 = Mock()
+        pub2.poll.return_value = None
+
+        stopped_processes = []
+        spawn_calls = []
+
+        def mock_spawn(cmd, **kwargs):
+            spawn_calls.append(cmd)
+            if len(spawn_calls) == 1:
+                return relay_proc
+            if len(spawn_calls) == 2:
+                return pub1
+            return pub2
+
+        current_time = 100.0
+        def mock_monotonic():
+            return current_time
+
+        server = Mock()
+        loop_iterations = 0
+        def mock_handle_request():
+            nonlocal current_time, loop_iterations
+            loop_iterations += 1
+            if loop_iterations == 1:
+                current_time = 103.0  # 3s in, well under 20s
+            else:
+                raise KeyboardInterrupt
+
+        server.handle_request.side_effect = mock_handle_request
+
+        with patch("app.shutil.which", return_value="ffmpeg"), \
+             patch("app.stop_process", side_effect=lambda p: stopped_processes.append(p)), \
+             patch("time.monotonic", side_effect=mock_monotonic):
+            args = app.parse_args(["--rtsp-transport", "tcp", "--stream-mode", "video", "--recordings", "recordings"])
+            app.run(args, spawn=mock_spawn, wait_for_relay=Mock(), server_factory=lambda addr, handler: server,
+                    camera_probe=Mock(return_value={"verified": True}), stop_existing=Mock(),
+                    path_available=Mock(return_value=False))
+
+        self.assertIn(pub1, stopped_processes)
+        self.assertEqual(len(spawn_calls), 3)
 
 
 if __name__ == "__main__":

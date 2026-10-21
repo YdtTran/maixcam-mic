@@ -2,7 +2,7 @@ flowchart LR
   subgraph Device["MaixCAM"]
     CAM["Camera / rotated H.264 RTSP server"]
     MIC["BlueALSA capture / G.711 sender"]
-    RX["TB2 receiver / ALSA playback"]
+    RX["TB3 receiver / ALSA playback"]
     BT["BlueZ / BlueALSA / Bluetooth control"]
   end
   H["Worker headset"]
@@ -10,7 +10,7 @@ flowchart LR
     V["FFmpeg video copy"]
     A["FFmpeg microphone RTP receiver"]
     M["MediaMTX: maix01 / headsetmic / talkback"]
-    T["FFmpeg decode / paced TB2 sender"]
+    T["FFmpeg decode / paced TB3 sender"]
     API["Python operator HTTP API"]
     R["Multistream recorder"]
     F["recordings: H.264 + mixed / worker / operator AAC"]
@@ -24,10 +24,10 @@ flowchart LR
   M -->|"WHEP / WebRTC: video and worker audio"| B
   B -->|"WHIP / WebRTC: operator audio"| M
   M -->|"RTSP/TCP: talkback"| T
-  T -->|"Authenticated PCM TB2 / UDP 9002"| RX
+  T -->|"Token-free PCM TB3 / UDP 9002"| RX
   RX -->|"Bluetooth SCO playback"| H
   B <-->|"HTTP 8000: UI / JSON / SDP signaling"| API
-  API <-->|"Token HTTP 8765: status / select / clock"| BT
+  API <-->|"HTTP 8765: status / select / clock"| BT
   M -->|"Local RTSP/TCP: three paths"| R
   API -->|"Start / stop / status"| R
   R -->|"Stage / encode AAC / mux MP4"| F

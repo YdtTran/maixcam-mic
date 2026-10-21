@@ -8,6 +8,26 @@ The new path is SCO capture → PCM16/8 kHz/mono → G.711 mu-law RTP
 The optional [multistream recorder](multistream-recording.md) consumes the
 independent audio paths without changing live video.
 
+Camera direct UDP mode (`headset_mic_stream.py --rtp-port 8004`) now encodes
+S16LE capture in-process and sends 12-byte RTP headers plus 160-byte PCMU
+payloads every 20 ms. It starts no camera FFmpeg publisher; `arecord` remains
+the SCO capture process. Sequence numbers advance by one and timestamps by
+160 samples, wrapping at their RTP field limits; each sender starts with random
+counters and SSRC. Capture failures and legacy talkback pauses still send
+silence, and capture selection/retry behavior is preserved. Python uses
+`audioop` when available and a 64 KiB lookup table on Python 3.13+.
+Explicit RTSP audio mode (omit `--rtp-port`) retains FFmpeg. The PC receiver
+and `/headsetmic` browser/recording consumers are unchanged.
+
+Before preparing SCO or launching background services, the boot template runs
+`dmesg -n 4` (falling back to `/proc/sys/kernel/printk`) and disables `wlan0`
+power saving with `iw` (falling back to `iwconfig`). Both are best effort:
+missing tools, interfaces or permissions do not prevent startup. Console
+filtering does not stop syslog collecting kernel messages; CPU/logging gains
+must be measured after deployment. These source changes are **implemented;
+redeployment verification pending**. No hardware resource savings or audible
+acceptance are established by local tests.
+
 The receiver is opt-in in `app.py` with `--return-audio-port 8004`.
 `compose.yaml` enables independent return on UDP 8004; use `deploy_pc.ps1` for PC deployment.
 Use video mode with this option. The older `--headset-rtp-port` option is
@@ -54,7 +74,7 @@ the native operator is currently stopped despite the earlier session notes.
 
 ## 1. Inventory MaixCAM before changing services
 
-Run on MaixCAM as root; save output, without displaying the talkback token:
+Run on MaixCAM as root; save output without credentials:
 
 ```sh
 uname -a
@@ -161,7 +181,7 @@ silent during Talk because its pause/ack protection remains enabled.
 
 Only after the local SCO duplex trial succeeds, stop the existing Bluetooth
 connector and talkback receiver by their inspected PIDs/service names. Restart
-those two services with these options, retaining the synchronized token file:
+those two services with these options, using the compatible TB3 release on both PC and camera:
 
 ```sh
 nohup python3 /root/bluetooth_audio.py --playback-profile sco </dev/null >>/root/bluetooth-audio.log 2>&1 &
@@ -249,3 +269,30 @@ inputs does not establish synchronization. Define microphone-loss behavior
 click alignment and drift across long trials, and keep recorder failures
 isolated from the live publishers. This implementation adds no return audio to
 recordings.
+
+## Token-free release migration (2026-10-20)
+
+Current talkback uses TB3: a 24-byte header and up to 320 bytes of PCM, with no signature or shared-token HTTP header. Clock calibration requires TB3 on both sides. Use the combined deployment for the one-time paired update; existing SCO ordering, fixed earbuds and independent UDP8004 return stay unchanged. Legacy token material belongs only in private rollback snapshots. This trusted-LAN protocol does not authenticate audio senders.
+
+## Talkback interruption and retry
+
+If the PC decoder cannot start or browser speech media disappears (including a
+tab closing without Stop), the relay automatically cancels forwarding, releases
+its speaking slot and deletes that session's WHIP resource. Initial media gets
+the existing 10-second negotiation grace; RTSP reads retain their two-second
+timeout. After that grace, decoder EOF triggers cleanup. Decoder termination
+waits at most two seconds before kill and another two seconds after kill;
+other workers are joined for at most three seconds each, and WHIP deletion
+uses a three-second timeout. A failed deletion is best effort and does not
+retain local ownership.
+
+Release **Talk** if it is still held, then press it again. A new offer no longer
+requires the old browser's Stop or a PC restart. The talkback status API keeps
+the interruption reason until a fresh session starts or Stop acknowledges that
+same session. A delayed Stop or old worker cannot clear a replacement session
+or send a stop packet naming it. Retries retain fresh session IDs, camera-clock
+calibration, TB3 checks and the bounded three-frame audio queue. They do not
+restart video, re-pair the headset or change independent microphone return.
+
+This recovery change is **implemented; redeployment verification pending**.
+Automated failure/race checks do not establish audible headset recovery.

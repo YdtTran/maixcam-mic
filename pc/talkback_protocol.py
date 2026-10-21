@@ -1,38 +1,31 @@
-"""TB2: authenticated PCM16/8kHz/mono frames, at most 20ms per datagram.
+"""TB3: token-free PCM16/8kHz/mono frames, at most 20ms per datagram.
 
 Deploy this same module beside talkback_receiver.py on MaixCAM.
 """
-import hashlib
-import hmac
 import struct
 import time
 
+PROTOCOL_VERSION = "TB3"
 FRAME_BYTES = 320
 HEADER = struct.Struct("!3sBQIQ")  # magic, stop, session, sequence, UTC milliseconds
 MAX_AGE_MS = 2000  # Camera and PC clocks must be synchronized.
 
 
-def encode(token, pcm, session, sequence, timestamp=None, stop=False):
-    if len(token) != 16:
-        raise ValueError("talkback token must be 16 bytes")
+def encode(pcm, session, sequence, timestamp=None, stop=False):
     if (stop and pcm) or (not stop and (not pcm or len(pcm) > FRAME_BYTES or len(pcm) % 2)):
         raise ValueError("expected at most 20 ms of PCM16")
-    header = HEADER.pack(b"TB2", int(stop), session, sequence,
+    header = HEADER.pack(b"TB3", int(stop), session, sequence,
                          int(time.time() * 1000) if timestamp is None else timestamp)
-    body = header + pcm
-    return body + hmac.new(token, body, hashlib.sha256).digest()[:16]
+    return header + pcm
 
 
-def decode(packet, token, now_ms=None):
-    if len(packet) < HEADER.size + 16 or len(packet) > HEADER.size + FRAME_BYTES + 16:
+def decode(packet, now_ms=None):
+    if len(packet) < HEADER.size or len(packet) > HEADER.size + FRAME_BYTES:
         return None
-    body, signature = packet[:-16], packet[-16:]
-    if not hmac.compare_digest(signature, hmac.new(token, body, hashlib.sha256).digest()[:16]):
-        return None
-    magic, stop, session, sequence, timestamp = HEADER.unpack(body[:HEADER.size])
-    pcm = body[HEADER.size:]
+    magic, stop, session, sequence, timestamp = HEADER.unpack(packet[:HEADER.size])
+    pcm = packet[HEADER.size:]
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
-    if magic != b"TB2" or stop not in (0, 1) or abs(now_ms - timestamp) > MAX_AGE_MS:
+    if magic != b"TB3" or stop not in (0, 1) or abs(now_ms - timestamp) > MAX_AGE_MS:
         return None
     if (stop and pcm) or (not stop and (not pcm or len(pcm) % 2)):
         return None

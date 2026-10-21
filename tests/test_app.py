@@ -17,6 +17,20 @@ def fake_media_executable():
 
 
 class AppTests(unittest.TestCase):
+    def test_camera_base_rotation_environment_and_cli(self):
+        with patch.dict("os.environ", {"CAMERA_BASE_ROTATION": "0"}):
+            self.assertEqual(app.parse_args([]).camera_base_rotation, 0)
+        for angle in (0, 90, 180, 270):
+            with patch.dict("os.environ", {"CAMERA_BASE_ROTATION": str(angle)}):
+                self.assertEqual(app.parse_args([]).camera_base_rotation, angle)
+                self.assertEqual(app.parse_args(["--camera-base-rotation", "180"]).camera_base_rotation, 180)
+        for invalid in ("45", "-90", "360", "invalid", ""):
+            with patch.dict("os.environ", {"CAMERA_BASE_ROTATION": invalid}), patch("sys.stderr"):
+                with self.assertRaises(SystemExit):
+                    app.parse_args([])
+            with patch("sys.stderr"), self.assertRaises(SystemExit):
+                app.parse_args(["--camera-base-rotation", invalid])
+
     def test_multistream_default_and_explicit_legacy_fallback(self):
         self.assertEqual(app.parse_args(["--stream-mode", "video"]).recording_mode, "multistream")
         self.assertEqual(app.parse_args(["--recording-mode", "legacy", "--stream-mode", "audio"]).recording_mode, "legacy")
@@ -175,7 +189,7 @@ class AppTests(unittest.TestCase):
         path_available = Mock(return_value=False)
 
         with fake_media_executable(), patch("app.shutil.which", return_value="ffmpeg"), \
-             patch("app.time.monotonic", side_effect=[0, 11, 11]):
+             patch("app.time.monotonic", side_effect=[0, 21, 21]):
             app.run(app.parse_args([]), spawn=spawn, server_factory=lambda *a, **k: server,
                     wait_for_relay=lambda process: None, wait_for_audio=lambda process: None,
                     stop_existing=lambda: None, path_available=path_available)

@@ -3,6 +3,9 @@ param([switch]$Build, [switch]$CheckOnly, [switch]$Recreate)
 
 $ErrorActionPreference = 'Stop'
 Push-Location $PSScriptRoot
+Import-Module (Join-Path $PSScriptRoot 'scripts/NetworkDeployment.psm1') -DisableNameChecking
+$maintenance = $null
+$maintenanceSuccess = $false
 try {
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
         throw 'Install Docker Desktop, select Linux containers, and open Docker Desktop first.'
@@ -13,21 +16,14 @@ try {
         throw 'Open Docker Desktop and wait for the Linux engine to be running, then try again.'
     }
     if (-not (Test-Path -LiteralPath .env -PathType Leaf)) {
+        if ($CheckOnly) { throw 'Missing .env. Copy .env.example and configure the camera before deployment.' }
+        $maintenance = Enter-ProjectMaintenance $PSScriptRoot -StopOnly
         Copy-Item -LiteralPath .env.example -Destination .env
+        $maintenanceSuccess = $true
         throw 'Created .env. Set MAIX_IP to your camera address, save the file, then run this command again.'
     }
-    if (-not (Test-Path -LiteralPath .talkback_token -PathType Leaf)) {
-        $tokenBytes = New-Object byte[] 16
-        $tokenGenerator = [Security.Cryptography.RandomNumberGenerator]::Create()
-        try { $tokenGenerator.GetBytes($tokenBytes) } finally { $tokenGenerator.Dispose() }
-        [IO.File]::WriteAllText((Join-Path $PSScriptRoot '.talkback_token'),
-            ([BitConverter]::ToString($tokenBytes).Replace('-', '').ToLowerInvariant()))
-        Write-Host 'Created the camera pairing token. Deploy MaixCAM with deploy_maix.ps1 to synchronize it.'
-    }
-    if ((Get-Content -LiteralPath .talkback_token -Raw).Trim() -notmatch '^[0-9a-fA-F]{32}$') {
-        throw '.talkback_token must contain 32 hexadecimal characters. Restore the matching camera token.'
-    }
-    Write-Host '[PC 2/5] Validating configuration and pairing token...'
+    Write-Host '[PC 2/5] Validating configuration...'
+    Write-Host 'TB3 release: update PC and camera together using scripts/deploy.ps1; older camera releases cannot accept talkback.'
     $composeOptions = @('compose', '-f', 'compose.yaml')
     $configuration = & docker @composeOptions config --format json
     if ($LASTEXITCODE -ne 0) { throw 'Compose configuration is invalid. Check .env.' }
@@ -48,6 +44,7 @@ try {
     Write-Host '[PC 3/5] Checking port conflicts and recording status...'
     & (Join-Path $PSScriptRoot 'stop_docker_pc.ps1') -CheckOnly
     if ($CheckOnly) { Write-Host 'PC preflight passed.'; return }
+    $maintenance = Enter-ProjectMaintenance $PSScriptRoot
     New-Item -ItemType Directory -Force -Path recordings | Out-Null
     $upOptions = @('up', '-d', '--wait', '--wait-timeout', '120')
     if ($Build) { $upOptions += '--build' }
@@ -57,6 +54,21 @@ try {
     & docker @composeOptions @upOptions server
     if ($LASTEXITCODE -ne 0) {
         throw 'Docker deployment failed. Run: docker compose logs --tail 80 server'
+    }
+    if ($env:OS -eq 'Windows_NT') {
+        $portsToCheck = @(8004, 8005)
+        if (-not (Test-HostUdpListeners -Ports $portsToCheck)) {
+            Write-Host 'Windows host UDP 8004/8005 listener missing; checking recording status and recreating container...'
+            & (Join-Path $PSScriptRoot 'stop_docker_pc.ps1') -CheckOnly
+            & docker @composeOptions up -d --force-recreate --no-deps server
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Docker recreate failed while recovering UDP return listeners.'
+            }
+            if (-not (Test-HostUdpListeners -Ports $portsToCheck)) {
+                throw 'Docker container started, but Windows host UDP listeners on port 8004/8005 are missing.'
+            }
+            Write-Host 'Recreated container; Windows host UDP 8004/8005 listeners verified.'
+        }
     }
     Write-Host '[PC 5/5] Checking the operator page from Windows...'
     $operatorDeadline = (Get-Date).AddSeconds(30)
@@ -73,4 +85,10 @@ try {
     } while ($true)
     Write-Host 'Operator UI verified: http://127.0.0.1:8000 (admin / admin)'
     Write-Host 'TCP video and separate microphone return on UDP 8004. Confirm live picture and sound in the browser.'
-} finally { Pop-Location }
+    $status = Invoke-MaintenanceApi $PSScriptRoot
+    if ($status.PSObject.Properties.Name -notcontains 'maintenance' -or $status.maintenance.owner -cne $maintenance.Owner) {
+        Invoke-MaintenanceDocker @('compose', '-f', 'compose.yaml', 'stop', 'server') | Out-Null
+        throw 'Operator does not honor the maintenance marker; left stopped.'
+    }
+    $maintenanceSuccess = $true
+} finally { try { Exit-ProjectMaintenance $maintenance $maintenanceSuccess } finally { Pop-Location } }

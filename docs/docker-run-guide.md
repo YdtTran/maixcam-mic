@@ -9,8 +9,8 @@ commands in dated session logs are historical evidence, not current instructions
 
 - Windows PC: Docker Desktop with Linux containers, PowerShell and Docker Compose
   supporting `up --wait`. Host networking is not required.
-- Camera installation: PuTTY `plink` and `pscp` supporting `-pwfile`, a verified
-  host-key fingerprint, and root SSH access.
+- Camera installation: Windows OpenSSH `ssh.exe` and `scp.exe`, verified
+  `known_hosts`, and root SSH access.
 - Prepared MaixCAM: MaixPy launcher at `/maixapp/apps`, Python 3, BlueZ, BlueALSA,
   FFmpeg, `arecord`, `aplay`, and a compatible Bluetooth headset.
 - Docker reaches `MAIX_IP` over the LAN. The camera sends microphone RTP to the
@@ -22,24 +22,29 @@ Old `.env` values for `HEADSET_RTP_PORT`, `RETURN_AUDIO_PORT` and `WEBRTC_HOSTS`
 are no longer consumed. `RECORDING_MODE` defaults to `multistream` (video plus mixed/worker/operator audio);
 select `legacy` explicitly for video-only recordings.
 
-The scripts create `.talkback_token` only if missing and validate its 32-character
-hexadecimal format. Preserve it across updates and deploy the same file to the
-camera. It is mounted read-only, excluded from Git and never baked into an image.
+The release uses token-free TB3 for talkback and camera HTTP control. No token
+file, mount or copy step is needed. Update PC and camera together using
+[combined deployment](../scripts/README.md#one-time-tb3-migration). Old versions
+are incompatible; optional legacy tokens remain private rollback material only.
 
 ## Camera installation
 
 ```powershell
-.\deploy_maix.ps1 -MaixHost 10.172.16.1 -PcIp 192.168.1.4 -HeadsetMac 'AA:BB:CC:DD:EE:FF' -HostKey 'SHA256:YOUR_VERIFIED_FINGERPRINT' -Reboot
+powershell -ExecutionPolicy Bypass -File .\deploy_maix.ps1 -MaixHost 10.172.16.1 -PcIp 192.168.1.4 -HeadsetMac 'AA:BB:CC:DD:EE:FF' -HostKey 'SHA256:YOUR_VERIFIED_FINGERPRINT' -Reboot
 ```
 
 Replace the addresses and fingerprint. Enter the password at the private prompt,
-or supply `-KeyPath` for a PuTTY private key. Password authentication uses a local
-temporary `-pwfile`, removed in `finally`; the password is not printed or passed
-as a command-line value.
+or supply `-KeyPath` for an OpenSSH private key, or a SecureString `-Password`.
+Install OpenSSH Client as described in the [Windows setup guide](../README.md#install-openssh-client).
+Verify the camera fingerprint through your installer before saving it in
+`known_hosts`; `-HostKey` checks that saved entry and does not enroll a new host.
+PuTTY `.ppk` keys must be exported to OpenSSH format before use with `-KeyPath`.
+The OpenSSH askpass helper is temporary and removed in `finally`; passwords
+are not printed or passed as command-line values.
 
 The script stages files in a private camera directory, checks Python/shell syntax,
 and backs up existing files under `/root/workercam-backup-<id>` before installing.
-Backups include `/etc/rc.local`, the camera launcher app and metadata, token and
+Backups include `/etc/rc.local`, the camera launcher app and metadata, optional legacy recovery token and
 audio settings. Save the printed backup path for rollback.
 
 It installs the camera app at `/maixapp/apps/maix_rtsp`, sets it as the launcher's
@@ -63,7 +68,10 @@ packets. Neither check certifies audible headset performance.
 
 This validates Compose and transport settings, rejects a conflicting native
 listener, checks recording status in the existing project container, builds when
-requested, starts the service and verifies Windows HTTP access. Docker packages
+requested, starts the service and verifies Windows HTTP access. It also verifies
+Windows host UDP return-audio listeners (ports 8004 and 8005), recreating the
+single `server` container (`docker compose up -d --force-recreate --no-deps server`)
+if Docker Desktop drops a port binding while recording is idle. Docker packages
 the compiled interface, Python, FFmpeg and MediaMTX. No local language runtimes
 or media binaries are required.
 
@@ -119,6 +127,12 @@ An unavailable camera fails the startup TCP probe and the container retries;
 check camera power and `MAIX_IP`. If Docker is healthy but Windows HTTP fails,
 inspect Docker Desktop forwarding and port ownership.
 
+If camera video freezes or drops, do not kill the process and start manual
+`python3 /maixapp/apps/maix_rtsp/main.py` instances over SSH; `launcher_daemon`
+manages camera video and unsynchronized manual restarts race ISP/MMF hardware
+teardown, triggering camera read timeouts. Recover with a recording-safe clean
+reboot instead (`deploy_maix.ps1 -Reboot`, `scripts/deploy.ps1`, or `/sbin/reboot`).
+
 Container logs rotate at 10 MB with three files. Recordings persist through their
 host bind mount. Decoder logs inside `.runtime` in the container are temporary;
 collect them before replacing a container if needed for troubleshooting.
@@ -135,19 +149,21 @@ it refuses to guess. Inspect logs and recordings before any manual forced stop.
 Docker's two-minute grace period is a fallback, not a guarantee that a long
 multistream mux finishes under forced shutdown. Finish recording in the UI first.
 
-Back up `recordings/`, `.env` and `.talkback_token` while recording is stopped.
-For PC rollback, restore a known project version and run `deploy_pc.ps1 -Build`
-with the preserved settings and token.
+Back up `recordings/`, `.env` and private recovery snapshots while recording is
+stopped. To recover a prior token-based release, use the captured old image and
+`rollback.compose.json` with its private legacy token mount, rather than the
+new token-free Compose file. Missing/malformed/mismatched legacy material means
+old-release talkback recovery is unavailable; it does not block new TB3 setup.
 
-For camera rollback, connect over SSH and inspect the saved backup directory.
-Restore its `/root` modules/config/token, `rc.local` to `/etc/rc.local`,
-`maix_rtsp` to `/maixapp/apps/maix_rtsp`, and launcher metadata to its original
-paths. Restore only files present in that backup, then reboot once. If the token
-changes, restore the matching PC token. Avoid duplicate audio processes.
+For camera rollback, restore the saved `/root` modules/configuration,
+`rc.local` to `/etc/rc.local`, launcher app and metadata to their original paths,
+and optional matching old token only for an old release. Keep PC stopped until
+camera restoration finishes, reboot once, then restore the matching PC snapshot.
+Reverify media/control before claiming recovery. Avoid duplicate audio processes.
 
 ## Linux Docker hosts
 
-Use the same `.env`, matching token, `recordings/` directory and `compose.yaml`.
+Use the same `.env`, `recordings/` directory and `compose.yaml`.
 The Windows scripts are the customer entry points; Linux installers can use
 `docker compose up --build -d --wait` and `docker compose stop server` after
 checking recording status. Use a browser on the Docker host's local desktop.

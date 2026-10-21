@@ -174,6 +174,42 @@ an empty video file cannot produce a valid four-track MP4. Check with ffprobe
 and VLC before deleting any staging media. Manually named recovery files are
 not listed by the UI's recording-ID filter.
 
+## Legacy recording failures
+
+The explicit `legacy` fallback checks FFmpeg's exit code both when Stop is
+pressed and when capture exits on its own. A nonzero exit, forced termination,
+or missing/empty output is a failure, even if some MP4 bytes were written.
+The status API and interface retain the error until another recording starts;
+they do not announce a saved recording. If FFmpeg still has not exited after
+the kill deadline, capture stays locked until its exit is observed.
+
+Failed output is retained as `recordings/<id>.failed.mp4`, alongside
+`<id>.ffmpeg.log`, without success metadata. These files are excluded from the
+saved-recording list, including after restarting the operator. Keep both files
+and copy the media to a separate recovery location before attempting repairs.
+A killed MP4 may be missing its final index and may be unrecoverable; bytes on
+disk do not prove playable media. Inspect the log and verify any recovered copy
+with ffprobe and full playback before removing the originals. Recovery is manual.
+Successful legacy captures keep their existing `<id>.mp4` name, duration and
+rotation metadata; existing saved recordings are unchanged.
+
+## Optional metadata recovery
+
+Malformed optional JSON does not prevent startup or hide saved MP4s. An invalid
+`recordings/.camera-view.json` uses manager rotation zero (the configured camera
+baseline offset still applies). The interface shows a separate metadata warning,
+not a capture failure. Copy the original JSON somewhere safe before selecting
+and saving a valid camera rotation; the normal atomic save replaces the view
+file and clears its warning. Failed saves leave the warning in place.
+
+An invalid `<id>.json` sidecar leaves its MP4 listed with **Unknown** duration
+(`duration_seconds: null` in the list API). Missing sidecars also have unknown
+duration. Reading metadata never deletes or rewrites these files. Back up the
+sidecar, then repair it to a JSON object with a finite, nonnegative numeric
+`duration_seconds` and refresh Recordings. Do not delete the MP4. Sidecar
+warnings clear on the next successful list refresh; they and view warnings are
+reported separately from recorder errors in status `metadata_warnings`.
+
 ## Validation
 
 ```powershell

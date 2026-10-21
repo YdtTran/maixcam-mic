@@ -22,6 +22,7 @@ from pc.check_camera_udp import check_camera
 
 
 ROOT = Path(__file__).resolve().parent
+PUBLISHER_STARTUP_GRACE_SECONDS = 20
 
 
 def media_executable(platform_name=None):
@@ -141,10 +142,12 @@ def parse_args(argv=None):
                         help="Optional MaixCAM USB IPv4 address for diagnostics")
     parser.add_argument("--bind-host", default="127.0.0.1", help="Operator page bind address")
     parser.add_argument("--port", type=int, default=8000, help="Operator page port")
+    parser.add_argument("--camera-base-rotation", type=int, choices=(0, 90, 180, 270),
+                        default=os.environ.get("CAMERA_BASE_ROTATION", "0"),
+                        help="Fixed camera mounting offset in counter-clockwise degrees")
     parser.add_argument("--recordings", type=Path, default=Path("recordings"))
     parser.add_argument("--recording-mode", choices=("legacy", "multistream"), default="multistream",
                         help="PC recorder (default: multistream); independent of live stream mode")
-    parser.add_argument("--talkback-token", type=Path, default=ROOT / ".talkback_token")
     parser.add_argument("--rtsp-transport", choices=("tcp", "udp"),
                         default=os.environ.get("RTSP_TRANSPORT", "udp"))
     parser.add_argument("--stream-mode", choices=("video", "audio", "combined"),
@@ -154,6 +157,8 @@ def parse_args(argv=None):
     parser.add_argument("--return-audio-port", type=int, default=os.environ.get("RETURN_AUDIO_PORT") or None,
                         help="Independent PCMU RTP receiver for /headsetmic (video mode only)")
     args = parser.parse_args(argv)
+    if args.camera_base_rotation not in (0, 90, 180, 270):
+        parser.error("CAMERA_BASE_ROTATION must be 0, 90, 180 or 270")
     if args.recording_mode == "multistream" and args.stream_mode == "audio":
         parser.error("Multistream recording requires a video stream")
     if args.return_audio_port is not None:
@@ -285,18 +290,13 @@ def run(args, spawn=subprocess.Popen, server_factory=ThreadingHTTPServer,
     elif os.name == "nt":
         stop_old_processes()
 
-    token_path = args.talkback_token
-    talkback = None
-    bluetooth = None
-    if token_path.is_file():
-        token = bytes.fromhex(token_path.read_text().strip())
-        bluetooth = CameraBluetoothClient(args.maix_ip, token.hex())
-        talkback = TalkbackRelay(token, (args.maix_ip, 9002), transport=args.rtsp_transport,
-                                clock_sync=bluetooth.talkback_clock)
+    bluetooth = CameraBluetoothClient(args.maix_ip)
+    talkback = TalkbackRelay((args.maix_ip, 9002), transport=args.rtsp_transport,
+                             clock_sync=bluetooth.talkback_clock)
 
     relay = publisher = server = return_audio = None
     manager = RecordingManager(args.recordings, transport=args.rtsp_transport, mode=args.stream_mode,
-                               recording_mode=args.recording_mode)
+                               recording_mode=args.recording_mode, base_rotation=args.camera_base_rotation)
     audio_sdp = None
     if args.headset_rtp_port:
         runtime = ROOT / ".runtime"
@@ -330,7 +330,7 @@ def run(args, spawn=subprocess.Popen, server_factory=ThreadingHTTPServer,
                     raise RuntimeError("MediaMTX exited")
                 now = time.monotonic()
                 publisher_exited = publisher.poll() is not None
-                check_stream = now - publisher_started >= 10 and now - last_health_check >= 2
+                check_stream = now - publisher_started >= PUBLISHER_STARTUP_GRACE_SECONDS and now - last_health_check >= 2
                 if check_stream:
                     last_health_check = now
                 if now >= next_retry_at and (publisher_exited or (check_stream and not path_available("maix01"))):

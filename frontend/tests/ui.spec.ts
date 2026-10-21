@@ -1,7 +1,80 @@
 import { test, expect, type Page } from "@playwright/test";
 import { demoVideo } from "../src/demo";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { readFile } from "node:fs/promises";
 
-async function setup(page: Page, fixed = false) {
+test("real backend downloads exact bytes natively and retains range playback and seeking", async ({ page, request, baseURL }) => {
+  const backend = spawn("python", ["-u", "-c", `
+import base64, sys, tempfile, threading, urllib.request
+from http.server import ThreadingHTTPServer
+from pathlib import Path
+from pc.operator_server import RecordingManager, make_handler
+with tempfile.TemporaryDirectory() as directory:
+    clip = Path('frontend/src/demo.ts').read_text().split('base64,')[1].split("'")[0]
+    Path(directory, '20261021T000000Z_12345678.mp4').write_bytes(base64.b64decode(clip))
+    class Handler(make_handler(RecordingManager(directory))):
+        def do_GET(self):
+            if self.path.startswith('/api/'):
+                return super().do_GET()
+            with urllib.request.urlopen(sys.argv[1] + self.path) as response:
+                data = response.read()
+                self.send_response(200)
+                self.send_header('Content-Type', response.headers['Content-Type'])
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    print(server.server_port, flush=True)
+    sys.stdin.readline()
+    server.shutdown()
+    server.server_close()
+`, baseURL!], { cwd: "..", windowsHide: true });
+  try {
+    const [output] = await once(backend.stdout, "data");
+    const origin = `http://127.0.0.1:${String(output).trim()}`;
+    const file = "/api/recordings/20261021T000000Z_12345678/file";
+    const bytes = Buffer.from(demoVideo.split(",")[1], "base64");
+    await setup(page);
+    await page.unroute("**/api/**");
+    await page.addInitScript(() => {
+      const original = window.fetch;
+      window.fetch = (...args) => {
+        if (String(args[0]).endsWith("/file")) throw new Error("Full-file fetch forbidden");
+        return original(...args);
+      };
+      URL.createObjectURL = () => { throw new Error("Application Blob forbidden"); };
+    });
+    await page.goto(origin + "/operator_test.html");
+    await login(page);
+    await page.getByRole("button", { name: "Recordings", exact: true }).click();
+    await expect(page.locator("tbody tr")).toHaveCount(1);
+    const pending = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Download", exact: true }).click();
+    const download = await pending;
+    expect(download.suggestedFilename()).toBe("20261021T000000Z_12345678.mp4");
+    expect(await readFile((await download.path())!)).toEqual(bytes);
+    for (const [range, start, end] of [["bytes=10-29", 10, 29], ["bytes=-32", bytes.length - 32, bytes.length - 1]] as const) {
+      const response = await request.get(origin + file, { headers: { Range: range } });
+      expect(response.status()).toBe(206);
+      expect(response.headers()["content-range"]).toBe(`bytes ${start}-${end}/${bytes.length}`);
+      expect(await response.body()).toEqual(bytes.subarray(start, end + 1));
+    }
+    expect((await request.get(origin + file, { headers: { Range: `bytes=${bytes.length}-` } })).status()).toBe(416);
+    await page.getByRole("button", { name: "Play", exact: true }).click();
+    const video = page.getByRole("dialog").locator("video");
+    await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.readyState)).toBeGreaterThanOrEqual(2);
+    await video.evaluate((element: HTMLVideoElement) => { element.pause(); element.currentTime = 2; });
+    await expect.poll(() => video.evaluate((element: HTMLVideoElement) => !element.seeking && element.currentTime >= 2)).toBe(true);
+  } finally {
+    const exited = once(backend, "exit");
+    backend.stdin.end("\n");
+    await exited;
+  }
+});
+
+async function setup(page: Page, fixed = false, baseRotation = 0) {
   let recording = false;
   let saved = false;
   let rotation = 0;
@@ -56,19 +129,19 @@ async function setup(page: Page, fixed = false) {
     requests.push(path);
     let payload: unknown = {};
     if (path === "/api/recordings/status")
-      payload = { recording, duration_seconds: 0, rotation };
+      payload = { recording, duration_seconds: 0, rotation, effective_rotation: (baseRotation + rotation) % 360 };
     if (path === "/api/camera/view") {
       if (route.request().method() === "POST") rotation = route.request().postDataJSON().rotation;
-      payload = { rotation, locked: recording };
+      payload = { rotation, effective_rotation: (baseRotation + rotation) % 360, locked: recording };
     }
     if (path === "/api/recordings/start") {
       recording = true;
-      payload = { recording: true, rotation };
+      payload = { recording: true, rotation, effective_rotation: (baseRotation + rotation) % 360 };
     }
     if (path === "/api/recordings/stop") {
       recording = false;
       saved = true;
-      payload = { recording: false, rotation };
+      payload = { recording: false, rotation, effective_rotation: (baseRotation + rotation) % 360 };
     }
     if (path === "/api/recordings")
       payload = saved
@@ -110,6 +183,29 @@ async function login(page: Page) {
     page.getByRole("heading", { name: "Live Workers" }),
   ).toBeVisible();
 }
+
+test("maintenance disables recording and shows owner-specific recovery", async ({ page }) => {
+  await setup(page);
+  await page.route("**/api/recordings/status", route => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ recording: false, rotation: 0, duration_seconds: 0,
+      maintenance: { owner: "a".repeat(32) } }),
+  }));
+  await login(page);
+  const message = page.getByRole("status", { name: "Maintenance active" });
+  await expect(message).toContainText("a".repeat(32));
+  await expect(message).toContainText("owner-specific recovery");
+  await expect(page.getByRole("button", { name: "Record", exact: true })).toBeDisabled();
+  await page.route("**/api/recordings/status", route => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ recording: false, rotation: 0, duration_seconds: 0, maintenance: null }),
+  }));
+  await page.getByRole("button", { name: "Recordings", exact: true }).click();
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(message).toBeHidden();
+  await page.getByRole("button", { name: "Live Workers", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Record", exact: true })).toBeEnabled();
+});
 
 test("manager rotation persists, preserves full player bounds, and locks while recording", async ({ page }) => {
   await setup(page);
@@ -389,6 +485,38 @@ test("demo recording persists, talk releases, playback and download work", async
   await expect(page.locator("tbody tr")).toContainText("Tran B");
 });
 
+test("optional metadata warnings stay separate from capture and clear after rotation repair", async ({ page }) => {
+  await setup(page);
+  let repaired = false;
+  const warning = ".camera-view.json: invalid rotation. Using rotation 0; back up this file, then save a camera rotation to replace it.";
+  await page.route("**/api/recordings/status", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ recording: false, rotation: repaired ? 90 : 0, duration_seconds: 0,
+      metadata_warnings: repaired ? [] : [warning] }),
+  }));
+  await page.route("**/api/camera/view", (route) => {
+    repaired = true;
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify({ rotation: 90 }) });
+  });
+  await page.route("**/api/recordings", (route) => route.fulfill({
+    contentType: "application/json", body: JSON.stringify([{
+      id: "20261021T000000Z_12345678", created_at: "2026-10-21T00:00:00Z",
+      duration_seconds: null, active: false, url: "/api/recordings/20261021T000000Z_12345678/file",
+    }]),
+  }));
+  await login(page);
+  const banner = page.getByRole("status", { name: "Metadata warnings" });
+  await expect(banner).toContainText(warning);
+  await expect(page.getByRole("button", { name: "Record", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Recordings", exact: true }).click();
+  await expect(page.locator("tbody tr")).toContainText("Unknown");
+  await expect(banner).toBeVisible();
+  await page.getByRole("button", { name: "Live Workers", exact: true }).click();
+  await page.getByLabel("Camera rotation").selectOption("90");
+  await expect(banner).not.toBeVisible();
+  await expect(page.getByRole("status")).toContainText("Camera rotation saved");
+});
+
 test("physical camera actions use existing APIs; settings retain Bluetooth selection", async ({
   page,
 }) => {
@@ -462,6 +590,48 @@ test("multistream finalization protects recording and reports saved after comple
   await expect(page.getByRole("button", { name: "Record", exact: true })).toBeEnabled({ timeout: 15000 });
   await expect(page.getByRole("status")).toContainText("recording saved");
 });
+
+for (const outcome of ["exit 1", "forced termination", "spontaneous exit 1"]) {
+  test(`legacy recording reports ${outcome} without saved success`, async ({ page }) => {
+    await setup(page);
+    let recording = false;
+    let error: string | null = null;
+    let releaseStatus: (() => void) | undefined;
+    const stopped = new Promise<void>((resolve) => { releaseStatus = resolve; });
+    const failure = `Legacy recording failed (${outcome}). Keep 20261021T000000Z_12345678.failed.mp4 and its FFmpeg log for recovery.`;
+    await page.route("**/api/recordings/status", async (route) => {
+      if (error && outcome !== "spontaneous exit 1") await stopped;
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ recording, error, rotation: 0 }) });
+    });
+    await page.route("**/api/recordings/start", (route) => {
+      recording = true;
+      return route.fulfill({ contentType: "application/json", body: JSON.stringify({ recording, rotation: 0 }) });
+    });
+    await page.route("**/api/recordings/stop", (route) => {
+      recording = false;
+      error = failure;
+      return route.fulfill({ contentType: "application/json", body: JSON.stringify({ recording, error, rotation: 0 }) });
+    });
+    await login(page);
+    await page.getByRole("button", { name: "Record", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("recording started");
+    if (outcome === "spontaneous exit 1") {
+      recording = false;
+      error = failure;
+    } else {
+      await page.getByRole("button", { name: "Stop Recording" }).click();
+    }
+    try {
+      await expect(page.getByRole("status")).toContainText(failure, { timeout: 15000 });
+      await expect(page.getByRole("status")).not.toContainText("recording saved");
+    } finally {
+      releaseStatus?.();
+    }
+    await expect(page.getByRole("button", { name: "Record", exact: true })).toBeEnabled();
+    await page.getByRole("button", { name: "Recordings", exact: true }).click();
+    await expect(page.getByText("No saved recordings yet. Start and stop a recording in Live Workers.")).toBeVisible();
+  });
+}
 
 test("desktop composition, search, notifications, and honest offline status", async ({
   page,
@@ -594,4 +764,31 @@ test("camera diagnosis displays USB fallback when Wi-Fi is unreachable", async (
   const result = page.getByRole("status").filter({ hasText: "use USB to diagnose" });
   await expect(result).toContainText("10.172.16.1");
   await expect(result).toContainText("RTSP control unreachable");
+});
+
+
+test("baseline offset changes live orientation without changing the manager selection", async ({ page }) => {
+  await setup(page, false, 270);
+  await login(page);
+  const control = page.getByLabel("Camera rotation", { exact: true });
+  const video = page.locator(".video-body video");
+  await expect(control).toBeEnabled();
+  await expect(control).toHaveValue("0");
+  await expect(video).toHaveAttribute("data-rotation", "270");
+  await expect(page.locator(".video-body canvas")).toBeVisible();
+  await control.selectOption("90");
+  await expect(control).toHaveValue("90");
+  await expect(video).toHaveAttribute("data-rotation", "0");
+  await expect(page.locator(".video-body canvas")).toHaveCount(0);
+  await control.selectOption("180");
+  await expect(video).toHaveAttribute("data-rotation", "90");
+  await expect(page.locator(".video-body canvas")).toBeVisible();
+  await page.getByRole("button", { name: "Record", exact: true }).click();
+  await expect(control).toBeDisabled();
+  await expect(video).toHaveAttribute("data-rotation", "90");
+  await page.getByRole("button", { name: "Stop Recording", exact: true }).click();
+  await expect(control).toBeEnabled();
+  await page.reload();
+  await expect(control).toHaveValue("180");
+  await expect(video).toHaveAttribute("data-rotation", "90");
 });

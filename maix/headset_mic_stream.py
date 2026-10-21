@@ -3,7 +3,10 @@
 import argparse
 import os
 import signal
+import socket
+import struct
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -17,6 +20,52 @@ PAUSE_PATH = Path("/run/headset-mic-paused")
 ACK_PATH = Path("/run/headset-mic-paused.ack")
 FRAME_BYTES = 320  # 20 ms of signed 16-bit mono PCM at 8 kHz.
 SILENCE = bytes(FRAME_BYTES)
+
+
+def ulaw_table():
+    table = bytearray(65536)
+    for raw in range(65536):
+        # Match audioop's 14-bit quantization, including negative rounding.
+        sample = (raw if raw < 32768 else raw - 65536) >> 2
+        magnitude = abs(sample) + 33
+        segment = max(0, magnitude.bit_length() - 6)
+        code = 127 if segment >= 8 else (segment << 4) | ((magnitude >> (segment + 1)) & 15)
+        table[raw] = code ^ (127 if sample < 0 else 255)
+    return bytes(table)
+
+
+try:
+    import audioop
+except ImportError:  # Python 3.13+.
+    audioop = None
+
+
+class RtpPcmUlawSender:
+    def __init__(self, target, port):
+        self.target = (target, port)
+        self.sequence, self.timestamp, self.ssrc = struct.unpack("!HII", os.urandom(10))
+        self.table = ulaw_table() if audioop is None else None
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket.setblocking(False)
+
+    def send(self, frame):
+        if len(frame) != FRAME_BYTES:
+            raise ValueError("PCMU requires a 320-byte S16LE frame")
+        if self.table is not None:
+            payload = bytes(self.table[lo | (hi << 8)] for lo, hi in zip(frame[::2], frame[1::2]))
+        else:
+            pcm = audioop.byteswap(frame, 2) if sys.byteorder != "little" else frame
+            payload = audioop.lin2ulaw(pcm, 2)
+        header = struct.pack("!BBHII", 0x80, 0, self.sequence, self.timestamp, self.ssrc)
+        self.sequence = (self.sequence + 1) & 0xffff
+        self.timestamp = (self.timestamp + 160) & 0xffffffff
+        try:
+            self.socket.sendto(header + payload, self.target)
+        except BlockingIOError:
+            pass  # Drop a late frame rather than queue stale audio.
+
+    def close(self):
+        self.socket.close()
 
 
 def selected_mac(path=SELECTION_PATH):
@@ -67,8 +116,10 @@ def stop_process(process):
 
 def publish_audio(target, selection_path=SELECTION_PATH, pause_path=PAUSE_PATH, ack_path=ACK_PATH, rtp_port=None,
                   transport="udp", rtsp_port=8554):
-    publisher = subprocess.Popen(publisher_command(target, rtp_port, transport, rtsp_port), stdin=subprocess.PIPE, bufsize=0)
-    os.set_blocking(publisher.stdin.fileno(), False)
+    if transport not in ("tcp", "udp") or (transport == "tcp" and rtp_port):
+        raise ValueError("TCP mode requires RTSP audio, not direct RTP")
+    sender = RtpPcmUlawSender(target, rtp_port) if rtp_port else None
+    publisher = None
     capture = None
     pending = bytearray()
     retry_capture_at = 0.0
@@ -76,7 +127,11 @@ def publish_audio(target, selection_path=SELECTION_PATH, pause_path=PAUSE_PATH, 
     active_mac = None
     next_selection_check = 0.0
     try:
-        while publisher.poll() is None:
+        if sender is None:
+            publisher = subprocess.Popen(publisher_command(target, transport=transport, rtsp_port=rtsp_port),
+                                         stdin=subprocess.PIPE, bufsize=0)
+            os.set_blocking(publisher.stdin.fileno(), False)
+        while publisher is None or publisher.poll() is None:
             now = time.monotonic()
             if now >= next_selection_check:
                 next_selection_check = now + 0.5
@@ -130,7 +185,9 @@ def publish_audio(target, selection_path=SELECTION_PATH, pause_path=PAUSE_PATH, 
                         del pending[:FRAME_BYTES]
 
             try:
-                if os.write(publisher.stdin.fileno(), frame) != FRAME_BYTES:
+                if sender is not None:
+                    sender.send(frame)
+                elif os.write(publisher.stdin.fileno(), frame) != FRAME_BYTES:
                     raise RuntimeError("audio publisher is not keeping up")
             except (BrokenPipeError, BlockingIOError):
                 break
@@ -142,6 +199,8 @@ def publish_audio(target, selection_path=SELECTION_PATH, pause_path=PAUSE_PATH, 
         ack_path.unlink(missing_ok=True)
         stop_process(capture)
         stop_process(publisher)
+        if sender is not None:
+            sender.close()
 
 
 def main():
@@ -171,6 +230,9 @@ def main():
             time.sleep(3)
         except KeyboardInterrupt:
             break
+        except OSError as error:
+            print(f"Headset mic publisher unavailable: {error}; retrying", flush=True)
+            time.sleep(3)
 
 
 if __name__ == "__main__":

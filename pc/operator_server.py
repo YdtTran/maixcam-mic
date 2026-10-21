@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -27,7 +28,7 @@ RECORDING_ID = re.compile(r"^[0-9]{8}T[0-9]{6}Z_[0-9a-f]{8}$")
 
 class RecordingManager:
     def __init__(self, directory=DEFAULT_RECORDINGS, source="rtsp://127.0.0.1:8554/maix01", spawn=subprocess.Popen,
-                 transport="udp", mode="combined", recording_mode="multistream"):
+                 transport="udp", mode="combined", recording_mode="multistream", base_rotation=0):
         if transport not in ("tcp", "udp") or mode not in ("video", "audio", "combined"):
             raise ValueError("Invalid transport or stream mode")
         self.transport = transport
@@ -47,15 +48,77 @@ class RecordingManager:
         self._recording_id = None
         self._started = None
         self._log = None
+        self._base_rotation = validate_rotation(base_rotation)
         self._rotation = 0
         self._view_path = self.directory / ".camera-view.json"
+        self._maintenance_path = self.directory / ".maintenance.json"
+        self._metadata_warnings = {}
         if self._view_path.is_file():
-            self._rotation = validate_rotation(json.loads(self._view_path.read_text())["rotation"])
+            try:
+                view = json.loads(self._view_path.read_text())
+                if not isinstance(view, dict):
+                    raise ValueError("expected an object")
+                self._rotation = validate_rotation(view.get("rotation"))
+            except (ValueError, OSError) as error:
+                self._metadata_warnings[self._view_path.name] = (
+                    f"{self._view_path.name}: {error}. Using rotation 0; back up this file, "
+                    "then save a camera rotation to replace it.")
+
+    @property
+    def effective_rotation(self):
+        return (self._base_rotation + self._rotation) % 360
+
+    def maintenance(self):
+        with self._lock:
+            try:
+                marker = json.loads(self._maintenance_path.read_text())
+                self._validate_owner(marker.get("owner") if isinstance(marker, dict) else None)
+                return marker
+            except FileNotFoundError:
+                return None
+            except (ValueError, OSError) as error:
+                return {"owner": None, "error": f"Invalid maintenance marker: {error}; inspect {self._maintenance_path.name} before recovery"}
+
+    @staticmethod
+    def _validate_owner(owner):
+        if not isinstance(owner, str) or not re.fullmatch(r"[a-f0-9]{32}", owner):
+            raise ValueError("maintenance owner must be a 32-character lowercase hexadecimal operation ID")
+
+    def begin_maintenance(self, owner):
+        self._validate_owner(owner)
+        with self._lock:
+            self._refresh()
+            if self._process is not None:
+                raise RuntimeError("Stop recording and wait for finalization before maintenance")
+            marker = self.maintenance()
+            if marker is not None:
+                if marker.get("owner") != owner:
+                    raise RuntimeError("Maintenance belongs to another owner; use owner-specific recovery")
+                return self.status()
+            self.directory.mkdir(parents=True, exist_ok=True)
+            with self._maintenance_path.open("x") as output:
+                json.dump({"owner": owner}, output)
+            return self.status()
+
+    def end_maintenance(self, owner):
+        self._validate_owner(owner)
+        with self._lock:
+            self._refresh()
+            if self._process is not None:
+                raise RuntimeError("Stop recording and wait for finalization before maintenance recovery")
+            marker = self.maintenance()
+            if marker is not None:
+                if marker.get("owner") != owner:
+                    raise RuntimeError("Maintenance belongs to another owner; use owner-specific recovery")
+                self._maintenance_path.unlink()
+            return self.status()
 
     def camera_view(self):
         with self._lock:
             self._refresh()
-            return {"rotation": self._rotation, "locked": self._process is not None}
+            return {"rotation": self._rotation, "effective_rotation": self.effective_rotation,
+                    "metadata_warnings": list(self._metadata_warnings.values()),
+                    "locked": self._process is not None}
 
     def set_camera_view(self, rotation):
         validate_rotation(rotation)
@@ -68,17 +131,44 @@ class RecordingManager:
             temporary.write_text(json.dumps({"rotation": rotation}))
             temporary.replace(self._view_path)
             self._rotation = rotation
+            self._metadata_warnings.pop(self._view_path.name, None)
             return self.camera_view()
 
     def _refresh(self):
-        if self._process is not None and self._process.poll() is not None:
+        returncode = self._process.poll() if self._process is not None else None
+        if returncode is not None:
             if isinstance(self._process, MultistreamRecording):
                 self._last_recording_status = self._process.status()
+            else:
+                self._finish_legacy(returncode)
             self._close_process()
+
+    def _finish_legacy(self, returncode):
+        output = self.recording_path(self._recording_id)
+        error = self._last_recording_status.get("error")
+        if not error and returncode != 0:
+            error = f"Legacy recording failed (FFmpeg exit {returncode})."
+        if not error and (not output.is_file() or not output.stat().st_size):
+            error = "Legacy recording failed: FFmpeg produced no media."
+        if error:
+            failed = output.with_suffix(".failed.mp4")
+            if output.exists():
+                output.rename(failed)
+            self._last_recording_status = {
+                "error": f"{error} Keep {failed.name} (if present) and {output.with_suffix('.ffmpeg.log').name} for recovery; see docs/multistream-recording.md."
+            }
+        else:
+            output.with_suffix(".json").write_text(json.dumps({
+                "duration_seconds": round(time.monotonic() - self._started),
+                "rotation": self.effective_rotation,
+            }))
 
     def _close_process(self):
         if self._process and self._process.stdin:
-            self._process.stdin.close()
+            try:
+                self._process.stdin.close()
+            except OSError:
+                pass  # The recorder may have exited before closing its input.
         if self._log:
             self._log.close()
         self._process = None
@@ -102,6 +192,9 @@ class RecordingManager:
                 **details,
                 "recording": self._process is not None,
                 "rotation": self._rotation,
+                "effective_rotation": self.effective_rotation,
+                "metadata_warnings": list(self._metadata_warnings.values()),
+                "maintenance": self.maintenance(),
                 "id": self._recording_id,
                 "duration_seconds": details.get("duration_seconds", round(time.monotonic() - self._started)
                                                 if self._started else 0),
@@ -112,15 +205,17 @@ class RecordingManager:
     def start(self):
         with self._lock:
             self._refresh()
+            if self.maintenance() is not None:
+                raise RuntimeError("Maintenance is active. Wait for the owning operation or use owner-specific recovery in scripts/README.md")
             if self._process is not None:
                 raise RuntimeError("recording is already active")
             self.directory.mkdir(parents=True, exist_ok=True)
             recording_id = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ") + "_" + uuid4().hex[:8]
             output = self.recording_path(recording_id)
-            self._last_recording_status = {}
             if self.recording_mode == "multistream":
                 self._process = MultistreamRecording(output, self.source, self.transport, self.spawn,
-                                                    rotation=self._rotation)
+                                                    rotation=self.effective_rotation)
+                self._last_recording_status = {}
                 self._recording_id = recording_id
                 self._started = self._process.started
                 return self.status()
@@ -130,7 +225,7 @@ class RecordingManager:
                 "-rtsp_transport", self.transport, "-analyzeduration", "10000000",
                 "-probesize", "20000000",
             ]
-            input_rotation, output_rotation = rotation_options(self._rotation) if self.mode != "audio" else ([], [])
+            input_rotation, output_rotation = rotation_options(self.effective_rotation) if self.mode != "audio" else ([], [])
             command += [*input_rotation, "-i", self.source]
             if self.mode != "audio":
                 command += ["-map", "0:v:0", "-c:v", "copy", "-bsf:v",
@@ -148,6 +243,7 @@ class RecordingManager:
                 log.close()
                 raise
             self._process = process
+            self._last_recording_status = {}
             self._recording_id = recording_id
             self._started = time.monotonic()
             self._log = log
@@ -157,25 +253,26 @@ class RecordingManager:
         with self._lock:
             self._refresh()
             if self._process is None:
+                if self._last_recording_status.get("error"):
+                    return self.status()
                 raise RuntimeError("recording is not active")
             process = self._process
             if isinstance(process, MultistreamRecording):
                 process.stop()
                 return self.status()
-            output = self.recording_path(self._recording_id)
-            duration = round(time.monotonic() - self._started)
             try:
                 process.stdin.write(b"q\n")
                 process.stdin.flush()
-                process.wait(timeout=10)
-            except (BrokenPipeError, OSError, subprocess.TimeoutExpired):
+                returncode = process.wait(timeout=10)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                self._last_recording_status = {"error": f"Legacy recording interrupted during stop ({error}); forced termination required."}
                 process.kill()
-                process.wait(timeout=3)
-            finally:
-                self._close_process()
-            if output.is_file() and output.stat().st_size:
-                output.with_suffix(".json").write_text(json.dumps({"duration_seconds": duration,
-                                                                  "rotation": self._rotation}))
+                try:
+                    returncode = process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    return self.status()
+            self._finish_legacy(returncode)
+            self._close_process()
             return self.status()
 
     def wait(self):
@@ -195,19 +292,31 @@ class RecordingManager:
     def list_recordings(self):
         with self._lock:
             self._refresh()
+            self._metadata_warnings = {name: warning for name, warning in self._metadata_warnings.items()
+                                       if name == self._view_path.name}
             if not self.directory.exists():
                 return []
             recordings = []
             for path in sorted(self.directory.glob("*.mp4"), reverse=True):
                 if not RECORDING_ID.fullmatch(path.stem) or path.stat().st_size == 0:
                     continue
-                duration = 0
+                if path.stem == self._recording_id and self._last_recording_status.get("error"):
+                    continue
+                duration = None
                 metadata = path.with_suffix(".json")
                 if metadata.is_file():
                     try:
-                        duration = max(0, int(json.loads(metadata.read_text()).get("duration_seconds", 0)))
-                    except (ValueError, TypeError, OSError):
-                        pass
+                        document = json.loads(metadata.read_text())
+                        if not isinstance(document, dict):
+                            raise ValueError("expected an object")
+                        value = document.get("duration_seconds")
+                        if type(value) not in (int, float) or value < 0 or not math.isfinite(value):
+                            raise ValueError("duration_seconds must be a finite nonnegative number")
+                        duration = int(value)
+                    except (ValueError, OSError, OverflowError) as error:
+                        self._metadata_warnings[metadata.name] = (
+                            f"{metadata.name}: {error}. Duration is unknown; keep the MP4 and "
+                            "back up and repair its JSON sidecar, then refresh Recordings.")
                 recordings.append({
                     "id": path.stem,
                     "size_bytes": path.stat().st_size,
@@ -281,6 +390,7 @@ def make_handler(manager, html_path=APP_DIR / "operator_test.html", talkback=Non
                 return self._json(200, manager.list_recordings())
             if route == "/api/talkback/status":
                 return self._json(200, {"available": talkback is not None, "transport": "webrtc",
+                                        "protocol": "TB3",
                                         "error": talkback.error if talkback else None})
             if route == "/api/bluetooth/status":
                 if bluetooth is None:
@@ -303,6 +413,22 @@ def make_handler(manager, html_path=APP_DIR / "operator_test.html", talkback=Non
             origin = self.headers.get("Origin")
             if origin and origin != "http://" + self.headers.get("Host", ""):
                 return self._json(403, {"error": "cross-origin control is blocked"})
+            if route in ("/api/maintenance/begin", "/api/maintenance/end"):
+                try:
+                    size = int(self.headers.get("Content-Length", "0"))
+                    if size < 1 or size > 128:
+                        raise ValueError("invalid maintenance request size")
+                    payload = json.loads(self.rfile.read(size))
+                    if not isinstance(payload, dict) or set(payload) != {"owner"}:
+                        raise ValueError("request must contain only owner")
+                    operation = manager.begin_maintenance if route.endswith("/begin") else manager.end_maintenance
+                    return self._json(200, operation(payload["owner"]))
+                except (ValueError, UnicodeError) as error:
+                    return self._json(400, {"error": str(error)})
+                except RuntimeError as error:
+                    return self._json(409, {"error": str(error)})
+                except OSError as error:
+                    return self._json(503, {"error": str(error)})
             if route == "/api/camera/view":
                 try:
                     size = int(self.headers.get("Content-Length", "0"))
@@ -377,24 +503,24 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--source", default="rtsp://127.0.0.1:8554/maix01")
+    parser.add_argument("--camera-base-rotation", type=int, choices=(0, 90, 180, 270),
+                        default=os.environ.get("CAMERA_BASE_ROTATION", "0"),
+                        help="Fixed camera mounting offset in counter-clockwise degrees")
     parser.add_argument("--recordings", type=Path, default=DEFAULT_RECORDINGS)
     parser.add_argument("--recording-mode", choices=("legacy", "multistream"), default="multistream")
     parser.add_argument("--rtsp-transport", choices=("tcp", "udp"), default=os.environ.get("RTSP_TRANSPORT", "udp"))
     parser.add_argument("--talkback-host", required=True, help="MaixCAM IP address for UDP talkback")
     parser.add_argument("--maix-usb-ip", type=ipv4, default=os.environ.get("MAIX_USB_IP") or DEFAULT_USB_IP)
     parser.add_argument("--bind-host", default="127.0.0.1", help="Laptop IP address for the operator page")
-    parser.add_argument("--talkback-token", type=Path, default=PROJECT_ROOT / ".talkback_token")
     args = parser.parse_args()
+    if args.camera_base_rotation not in (0, 90, 180, 270):
+        parser.error("CAMERA_BASE_ROTATION must be 0, 90, 180 or 270")
     manager = RecordingManager(args.recordings, args.source, transport=args.rtsp_transport,
-                               recording_mode=args.recording_mode)
-    talkback = None
+                               recording_mode=args.recording_mode, base_rotation=args.camera_base_rotation)
     from .bluetooth_client import CameraBluetoothClient
-    bluetooth = None
-    if args.talkback_token.is_file():
-        token = bytes.fromhex(args.talkback_token.read_text().strip())
-        bluetooth = CameraBluetoothClient(args.talkback_host, token.hex())
-        talkback = TalkbackRelay(token, (args.talkback_host, 9002), transport=args.rtsp_transport,
-                                clock_sync=bluetooth.talkback_clock)
+    bluetooth = CameraBluetoothClient(args.talkback_host)
+    talkback = TalkbackRelay((args.talkback_host, 9002), transport=args.rtsp_transport,
+                             clock_sync=bluetooth.talkback_clock)
     server = ThreadingHTTPServer((args.bind_host, args.port), make_handler(
         manager, talkback=talkback, bluetooth=bluetooth,
         diagnostics=CameraDiagnostics(args.talkback_host, args.maix_usb_ip)))

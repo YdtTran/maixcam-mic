@@ -40,6 +40,10 @@ esac
             sleep = root / "sleep"
             sleep.write_text("#!/bin/sh\nexit 0\n")
             sleep.chmod(0o755)
+            for name in ("dmesg", "iw", "iwconfig"):
+                stub = root / name
+                stub.write_text("#!/bin/sh\nexit 0\n")
+                stub.chmod(0o755)
             script = root / "boot.sh"
             script.write_text(template.read_text().replace("/root/", directory + "/"))
             subprocess.run(["sh", str(script)], check=True, timeout=5,

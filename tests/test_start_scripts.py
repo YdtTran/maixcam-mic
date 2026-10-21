@@ -11,6 +11,38 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class BootTuningTests(unittest.TestCase):
+    def test_tuning_precedes_bluetooth_and_is_best_effort(self):
+        script = (ROOT / "maix/background_services.rc.local").read_text()
+        tuning = script[script.index("dmesg -n 4"):script.index('case "${AUDIO_PROFILE')]
+        self.assertIn("echo 4 >/proc/sys/kernel/printk", tuning)
+        self.assertIn("iw dev wlan0 set power_save off", tuning)
+        self.assertIn("iwconfig wlan0 power off", tuning)
+        self.assertEqual(tuning.count("|| true"), 2)
+        self.assertLess(script.index(tuning), script.index("--prepare-sco"))
+
+    @unittest.skipUnless(os.name != "nt" and shutil.which("sh"), "POSIX boot shell")
+    def test_shell_runs_fallbacks_and_continues_when_tuning_fails(self):
+        script = (ROOT / "maix/background_services.rc.local").read_text()
+        tuning = script[script.index("dmesg -n 4"):script.index('case "${AUDIO_PROFILE')]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("dmesg", "iw", "iwconfig"):
+                stub = root / name
+                stub.write_text('#!/bin/sh\necho "' + name + ' $*" >> "$EVENTS"\nexit 1\n')
+                stub.chmod(0o755)
+            for writable in (True, False):
+                target = root / "printk" if writable else root / "missing" / "printk"
+                result = subprocess.run([shutil.which("sh"), "-ec", tuning.replace("/proc/sys/kernel/printk", str(target)) +
+                                         "echo services-started"], capture_output=True, text=True, timeout=5,
+                                        env={**os.environ, "PATH": directory, "EVENTS": str(root / "events")})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("services-started", result.stdout)
+            self.assertEqual((root / "printk").read_text(), "4\n")
+            self.assertEqual((root / "events").read_text().splitlines(),
+                             ["dmesg -n 4", "iw dev wlan0 set power_save off", "iwconfig wlan0 power off"] * 2)
+
+
 @unittest.skipUnless(os.name == "nt", "Windows PowerShell deployment helpers")
 class DeploymentScriptTests(unittest.TestCase):
     def run_helper(self, name, case="ready", arguments=""):
@@ -45,6 +77,15 @@ function Invoke-NetworkProcess {
     }
     throw 'Unexpected executable'
 }
+function Test-HostUdpListeners {
+    param($Ports)
+    if ($env:DEPLOY_TEST_CASE -eq 'udp-missing') { return $false }
+    if ($env:DEPLOY_TEST_CASE -eq 'udp-recovered') {
+        if ($global:recreated) { return $true }
+        return $false
+    }
+    return $true
+}
 Export-ModuleMember -Function *
 ''')
             for folder in ("maix", "pc"):
@@ -53,12 +94,25 @@ Export-ModuleMember -Function *
                     if source.suffix in (".py", ".yaml", ".local"):
                         shutil.copy2(source, root / folder / source.name)
             (root / ".env").write_text("MAIX_IP=192.0.2.1\n")
+            if case == 'no-env':
+                (root / '.env').unlink()
             (root / ".env.example").write_text("MAIX_IP=192.0.2.1\n")
-            (root / ".talkback_token").write_text("00" * 16)
             (root / "test.ppk").write_text("mock key; not used for authentication")
             script = r'''
 $ErrorActionPreference = 'Stop'
 function Get-NetTCPConnection { return }
+$global:recreated = $false
+$global:stopped = $false
+$global:upgraded = $false
+function Get-NetUDPEndpoint {
+    param($LocalPort)
+    if ($env:DEPLOY_TEST_CASE -eq 'udp-missing') { return }
+    if ($env:DEPLOY_TEST_CASE -eq 'udp-recovered') {
+        if ($global:recreated) { return [pscustomobject]@{ LocalPort = $LocalPort } }
+        return
+    }
+    return [pscustomobject]@{ LocalPort = $LocalPort }
+}
 function docker {
     $global:LASTEXITCODE = 0
     $call = $args -join ' '
@@ -73,18 +127,34 @@ function docker {
         if ($env:DEPLOY_TEST_CASE -ne 'empty') { return 'test-container' }
         return
     }
-    if ($args[0] -eq 'inspect') { return 'running' }
+    if ($args[0] -eq 'inspect') { if ($global:stopped) { return 'exited' }; return 'running' }
     if ($call -like '*exec -T server*') {
         switch ($env:DEPLOY_TEST_CASE) {
             'recording' { return '{"recording":true}' }
             'finalizing' { return '{"recording":false,"finalizing":true}' }
             'status-failed' { $global:LASTEXITCODE = 1; return }
             'invalid-status' { return '{}' }
-            default { return '{"recording":false,"finalizing":false}' }
+            default {
+                if (($env:DEPLOY_TEST_CASE -eq 'legacy' -and -not $global:upgraded) -or $env:DEPLOY_TEST_CASE -eq 'legacy-unsupported') { return '{"recording":false,"finalizing":false}' }
+                $marker = Join-Path $env:DEPLOY_TEST_ROOT 'recordings/.maintenance.json'
+                if ($call -like '*/api/maintenance/begin*') {
+                    if ($call -notmatch "owner='([a-f0-9]{32})'") { throw 'Missing API owner' }
+                    [void](New-Item -ItemType Directory -Path (Split-Path $marker) -Force)
+                    [IO.File]::WriteAllText($marker, (@{owner=$Matches[1]} | ConvertTo-Json))
+                    Write-Host 'MAINTENANCE_BEGIN'
+                }
+                if ($call -like '*/api/maintenance/end*') { Remove-Item -LiteralPath $marker; Write-Host 'MAINTENANCE_END' }
+                $maintenance = if (Test-Path -LiteralPath $marker) { Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json } else { $null }
+                return (@{recording=$false;finalizing=$false;maintenance=$maintenance} | ConvertTo-Json -Compress)
+            }
         }
     }
-    if ($call -like '* up *') { Write-Host 'DOCKER_UP' }
-    if ($call -like '* stop server') { Write-Host 'DOCKER_STOP_SERVER' }
+    if ($call -like '*--force-recreate*') {
+        $global:recreated = $true
+        Write-Host 'DOCKER_RECREATE_SERVER'
+    }
+    if ($call -like '* up *') { $global:stopped = $false; $global:upgraded = $true; Write-Host 'DOCKER_UP' }
+    if ($call -like '* stop server') { $global:stopped = $true; Write-Host 'DOCKER_STOP_SERVER' }
 }
 $global:testClock = 0
 function Get-Date {
@@ -108,7 +178,51 @@ try {
                 capture_output=True, text=True, timeout=25,
             )
             captured = {p.name: p.read_text() for p in root.glob("captured-*")}
+            captured['maintenance-retained'] = (root / 'recordings/.maintenance.json').exists()
+            captured['host-lock-created'] = (root / '.runtime/mutation.lock').exists()
             return result.returncode, result.stdout + result.stderr, captured
+
+    def test_legacy_bootstrap_precedes_camera_mutation_and_stop_does_not_restart(self):
+        code, output, files = self.run_helper('deploy_maix.ps1', 'legacy', self.camera_arguments())
+        self.assertEqual(code, 0, output)
+        self.assertLess(output.index('DOCKER_STOP_SERVER'), output.index('DOCKER_UP'))
+        self.assertLess(output.index('DOCKER_UP'), output.index('CAMERA_PREFLIGHT'))
+        self.assertFalse(files['maintenance-retained'])
+        code, output, files = self.run_helper('stop_docker_pc.ps1', 'legacy')
+        self.assertEqual(code, 0, output)
+        self.assertNotIn('DOCKER_UP', output)
+        self.assertFalse(files['maintenance-retained'])
+
+    def test_unsupported_replacement_is_stopped_before_camera_mutation(self):
+        code, output, files = self.run_helper('deploy_maix.ps1', 'legacy-unsupported', self.camera_arguments())
+        self.assertNotEqual(code, 0, output)
+        self.assertNotIn('CAMERA_PREFLIGHT', output)
+        self.assertIn('Replacement does not honor maintenance', output)
+        self.assertGreater(output.rindex('DOCKER_STOP_SERVER'), output.index('DOCKER_UP'))
+        self.assertTrue(files['maintenance-retained'])
+
+    def test_check_only_does_not_create_maintenance_or_host_lock(self):
+        for script in ('deploy_pc.ps1', 'stop_docker_pc.ps1'):
+            code, output, files = self.run_helper(script, arguments='-CheckOnly')
+            self.assertEqual(code, 0, output)
+            self.assertFalse(files['maintenance-retained'])
+            self.assertFalse(files['host-lock-created'])
+
+    def test_missing_env_preflight_is_read_only_and_initialization_does_not_start(self):
+        code, output, files = self.run_helper('deploy_pc.ps1', 'no-env', '-CheckOnly')
+        self.assertNotEqual(code, 0, output)
+        self.assertFalse(files['host-lock-created'])
+        code, output, files = self.run_helper('deploy_pc.ps1', 'no-env')
+        self.assertNotEqual(code, 0, output)
+        self.assertIn('Created .env', output)
+        self.assertNotIn('DOCKER_UP', output)
+        self.assertFalse(files['maintenance-retained'])
+
+    def test_failed_camera_install_retains_maintenance_for_explicit_recovery(self):
+        code, output, files = self.run_helper('deploy_maix.ps1', 'install-failed', self.camera_arguments())
+        self.assertNotEqual(code, 0, output)
+        self.assertTrue(files['maintenance-retained'])
+        self.assertIn('Maintenance retained for owner', output)
 
     def test_deploy_checks_windows_access_after_container_start(self):
         code, output, _ = self.run_helper("deploy_pc.ps1")
@@ -118,6 +232,20 @@ try {
         code, output, _ = self.run_helper("deploy_pc.ps1", "http-failed")
         self.assertNotEqual(code, 0)
         self.assertIn("Windows cannot reach", output)
+        self.assertNotIn("Operator UI verified:", output)
+
+    def test_deploy_pc_recreates_container_when_udp_listener_missing_and_recovers(self):
+        code, output, _ = self.run_helper("deploy_pc.ps1", "udp-recovered")
+        self.assertEqual(code, 0, output)
+        self.assertIn("DOCKER_RECREATE_SERVER", output)
+        self.assertIn("Recreated container; Windows host UDP 8004/8005 listeners verified.", output)
+        self.assertIn("Operator UI verified:", output)
+
+    def test_deploy_pc_fails_when_udp_listener_remains_missing_after_recreate(self):
+        code, output, _ = self.run_helper("deploy_pc.ps1", "udp-missing")
+        self.assertNotEqual(code, 0)
+        self.assertIn("DOCKER_RECREATE_SERVER", output)
+        self.assertIn("listeners on port 8004/8005 are missing", output)
         self.assertNotIn("Operator UI verified:", output)
 
     def test_stop_and_update_protect_recording_and_unknown_status(self):
@@ -178,7 +306,8 @@ try {
         self.assertIn("AUDIO_PROFILE=sco", files["captured-camera.env"])
         installer = files["captured-installer.sh"]
         self.assertLess(installer.index('cp -p /etc/rc.local'), installer.index('cp "$name" "/root/$name"'))
-        self.assertIn("chmod 600 /root/.talkback_token", installer)
+        self.assertIn("chmod 600 /root/workercam.env", installer)
+        self.assertNotIn("workercam.env .talkback_token; do\n    cp", installer)
         self.assertNotIn("__STAGE__", installer)
 
     def test_camera_deployment_retains_explicit_a2dp_fallback(self):

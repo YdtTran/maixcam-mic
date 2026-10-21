@@ -14,6 +14,8 @@ import app
 from pc.headset_return import receiver_command
 from pc.operator_server import RecordingManager, make_handler
 from pc.talkback import TalkbackRelay
+from pc.talkback_protocol import decode as decode_packet
+from maix.talkback_receiver import TalkbackReceiver
 
 
 def free_port(kind=socket.SOCK_STREAM):
@@ -33,6 +35,23 @@ class HeadsetIntegrationTests(unittest.TestCase):
             directory = Path(directory)
             udp.bind(("127.0.0.1", 0))
             udp.settimeout(0.2)
+            packets = []
+            accepted = []
+            closing = threading.Event()
+            receiver = TalkbackReceiver(duplex=True)
+            def collect():
+                while not closing.is_set():
+                    try:
+                        packet = udp.recv(2048)
+                        payload = decode_packet(packet)
+                        if payload:
+                            packets.append(payload)
+                            if receiver.accept(packet):
+                                accepted.append(payload)
+                    except socket.timeout:
+                        pass
+            collector = threading.Thread(target=collect)
+            collector.start()
             config = directory / "mediamtx.yml"
             config.write_text(f"rtspAddress: 127.0.0.1:{rtsp}\nrtspTransports: [tcp]\n"
                               f"webrtcAddress: 127.0.0.1:{web}\nwebrtcLocalUDPAddress: :{ice}\n"
@@ -44,7 +63,7 @@ class HeadsetIntegrationTests(unittest.TestCase):
                                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 children.append(child)
                 return child
-            relay = TalkbackRelay(b"i" * 16, udp.getsockname(), relay_http=f"http://127.0.0.1:{web}",
+            relay = TalkbackRelay(udp.getsockname(), relay_http=f"http://127.0.0.1:{web}",
                                   relay_rtsp=f"rtsp://127.0.0.1:{rtsp}", transport="tcp")
             manager = RecordingManager(directory, source=f"rtsp://127.0.0.1:{rtsp}/maix01", transport="tcp", mode="video", recording_mode="legacy")
             server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(manager, talkback=relay))
@@ -84,13 +103,18 @@ class HeadsetIntegrationTests(unittest.TestCase):
                                          f"rtsp://127.0.0.1:{rtsp}/maix01", "-frames:v", "1", "-f", "null", "-"],
                                         capture_output=True, timeout=10)
                 self.assertEqual(decode.returncode, 0, decode.stderr)
-                self.assertGreater(len(udp.recv(2048)), 24)
+                audio = [packet for packet in accepted if packet[0] == "pcm"]
+                self.assertGreater(len(audio), 10, relay.error)
+                self.assertTrue(all(len(packet[1]) == 320 for packet in audio))
+                self.assertTrue(any(packet[0] == "stop" for packet in accepted))
                 print(result.stdout.strip())
                 print("Video decoded after RTP sender loss; recording contains video only; talkback UDP received")
             finally:
                 if manager.status()["recording"]:
                     manager.stop()
                 relay.close()
+                closing.set()
+                collector.join(timeout=2)
                 server.shutdown()
                 server.server_close()
                 thread.join()

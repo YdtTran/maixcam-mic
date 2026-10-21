@@ -7,9 +7,8 @@ from urllib.request import Request, urlopen
 
 
 class CameraBluetoothClient:
-    def __init__(self, host, token, open_url=urlopen):
+    def __init__(self, host, open_url=urlopen):
         self.base = f"http://{host}:8765/bluetooth"
-        self.token = token
         self.open_url = open_url
 
     def request(self, action, mac=None):
@@ -18,8 +17,7 @@ class CameraBluetoothClient:
         body = json.dumps({"mac": mac}).encode() if action == "select" else None
         method = "GET" if action in ("status", "clock") else "POST"
         request = Request(self.base + "/" + action, data=body, method=method,
-                          headers={"X-Control-Token": self.token,
-                                   "Content-Type": "application/json"})
+                          headers={"Content-Type": "application/json"})
         try:
             timeout = 25 if action == "scan" else 60 if action == "select" else 5
             with self.open_url(request, timeout=timeout) as response:
@@ -37,9 +35,8 @@ class CameraBluetoothClient:
         started = time.monotonic()
         code, body = self.request("clock")
         finished = time.monotonic()
-        if code == 404:
-            # Older cameras still require synchronized system clocks.
-            return lambda: int(time.time() * 1000)
+        if code == 404 or (code == 200 and body.get("talkback_protocol") != "TB3"):
+            raise RuntimeError("Incompatible talkback protocol; update PC and camera together to TB3")
         remote = body.get("time_ms")
         if (code != 200 or type(remote) is not int or remote <= 0
                 or finished - started > 1):

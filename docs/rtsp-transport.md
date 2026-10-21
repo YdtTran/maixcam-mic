@@ -10,13 +10,30 @@ See the [README](../README.md) and [Docker guide](docker-run-guide.md).
 The trials below document earlier investigations. Their diagnostic tools remain
 available for deliberate measurements; they do not change deployment defaults.
 
+## PC display orientation
+
+The source defaults to native-bound 768x432/20fps H.264 without camera-side
+pixel rotation. Set `CAMERA_BASE_ROTATION=0|90|180|270` in the PC `.env` for a
+fixed mounting offset (default `0`), then rebuild/redeploy the PC. Direct Python
+entry points `app.py` and `python -m pc.operator_server` read the process
+environment, or accept `--camera-base-rotation`; they do not load `.env`.
+
+Angles are counter-clockwise. Live display and new recordings use
+`(base_rotation + manager_rotation) % 360`. The manager selector and persisted
+`.camera-view.json` retain only the manager angle; the API returns it as
+`rotation` alongside `effective_rotation`. Existing recordings are unchanged.
+The browser applies the effective angle using the existing canvas quarter-turn
+renderer (CSS for 0/180); both recorders copy H.264 and write the effective MP4
+display matrix without resizing or re-encoding. Rotation remains locked during
+capture/finalization. A metadata-aware player is required to honor MP4 rotation.
+
 ## Transport controls and experimental modes
 
 Direct Python diagnostic defaults remain UDP/combined; Compose explicitly selects TCP/video. `RTSP_TRANSPORT=tcp|udp` (or
 `app.py --rtsp-transport`) selects camera ingestion, PC headset RTSP ingestion,
 combined publication, recording ingestion, and the local talkback decoder.
 MediaMTX accepts both transports. WHEP/WHIP and browser ICE remain UDP; the
-authenticated, sequenced TB2 talkback datagrams on camera port 9002 are unchanged.
+token-free, sequenced TB3 talkback datagrams on camera port 9002 are unchanged.
 No input buffering, codec, queue size or camera encoder defaults were tuned by
 this change.
 
@@ -56,6 +73,25 @@ TCP RTSP. The old host-network override and standalone PowerShell publisher
 were removed. Use `docker compose config --quiet` to validate deployment.
 Combined/UDP modes below are isolated diagnostic experiments, not customer
 startup instructions. Do not switch the accepted live route for routine cleanup.
+
+## Camera video supervision and recovery
+
+On MaixCAM, `/maixapp/apps/maix_rtsp/main.py` is supervised by the system
+launcher daemon (`/maixapp/apps/launcher/launcher_daemon`). If video becomes
+unresponsive, do **not** kill the video process (`kill -2`/`SIGINT`) and launch a
+manual `python3 /maixapp/apps/maix_rtsp/main.py` over SSH. Manual restarts while
+the launcher daemon is active race hardware MMF/ISP pipeline teardown (`cvi-vi`,
+`cvi-vpss`, `/tmp/isp_fifo`) and cause `camera read timeout` / `camera read failed`.
+
+Safe camera video recovery requires a clean camera reboot:
+- Automated: `.\scripts\deploy.ps1` or `.\deploy_maix.ps1 -Reboot`
+- Manual: verify recording is stopped, then issue `/sbin/reboot` on the camera
+
+On the PC side, deployment verifies that Windows host UDP return-audio listeners
+(ports 8004 and 8005) are active. If Docker Desktop leaves a port unbound while
+the container is running and recording is idle, deployment recreates the single
+Compose `server` container (`docker compose up -d --force-recreate --no-deps server`)
+to restore host UDP reception.
 
 ## Repeatable trials
 

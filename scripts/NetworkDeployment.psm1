@@ -1,5 +1,151 @@
 Set-StrictMode -Version Latest
 
+function Invoke-MaintenanceDocker {
+    param([string[]]$Arguments)
+    $output = & docker @Arguments
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot verify operator maintenance; inspect Docker logs before mutation.' }
+    return $output
+}
+
+function Get-MaintenanceOperator {
+    param([string]$ProjectRoot)
+    if ($env:OS -eq 'Windows_NT') {
+        foreach ($listener in @(Get-NetTCPConnection -LocalPort 8000,8554,8889 -State Listen -ErrorAction SilentlyContinue)) {
+            $process = Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)"
+            if ($process.Name -in @('python.exe', 'pythonw.exe', 'mediamtx.exe')) {
+                throw 'Stop the native project service before Docker maintenance.'
+            }
+        }
+    }
+    $compose = Join-Path $ProjectRoot 'compose.yaml'
+    $ids = @(Invoke-MaintenanceDocker @('compose', '-f', $compose, 'ps', '--all', '--quiet', 'server'))
+    foreach ($id in $ids) {
+        if (-not $id) { continue }
+        $state = Invoke-MaintenanceDocker @('inspect', '--format', '{{.State.Status}}', $id)
+        if ($state -eq 'running') { return 'running' }
+        if ($state -notin @('exited', 'created')) { throw "Operator is $state; cannot verify idle state." }
+    }
+    return 'stopped'
+}
+
+function Invoke-MaintenanceApi {
+    param([string]$ProjectRoot, [string]$Action = 'status', [string]$Owner)
+    $code = "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/api/recordings/status', timeout=3).read().decode())"
+    if ($Action -ne 'status') {
+        if ($Owner -cnotmatch '^[a-f0-9]{32}$' -or $Action -notin @('begin', 'end')) { throw 'Invalid maintenance request.' }
+        $code = "import json,urllib.request; print(urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8000/api/maintenance/$Action', data=json.dumps(dict(owner='$Owner')).encode(), headers={'Content-Type':'application/json'}), timeout=3).read().decode())"
+    }
+    $result = Invoke-MaintenanceDocker @('compose', '-f', (Join-Path $ProjectRoot 'compose.yaml'), 'exec', '-T', 'server', 'python', '-c', $code)
+    $status = $result | ConvertFrom-Json
+    if ($null -eq $status -or $status.PSObject.Properties.Name -notcontains 'recording' -or $status.recording -isnot [bool]) {
+        throw 'Invalid recording status; refusing maintenance.'
+    }
+    if ($status.recording -or ($status.PSObject.Properties.Name -contains 'finalizing' -and $status.finalizing)) {
+        throw 'Stop recording and wait for finalization before maintenance.'
+    }
+    return $status
+}
+
+function Enter-ProjectMaintenance {
+    param([string]$ProjectRoot, [switch]$StopOnly, [string]$RecoverOwner)
+    $ProjectRoot = [IO.Path]::GetFullPath($ProjectRoot)
+    $directory = Join-Path $ProjectRoot '.runtime'
+    $lockPath = Join-Path $directory 'mutation.lock'
+    $marker = Join-Path $ProjectRoot 'recordings/.maintenance.json'
+    $inherited = $env:WORKERCAM_MAINTENANCE_OWNER
+    if ($inherited -and -not $RecoverOwner) {
+        # A child may reuse ownership only while the outer process holds its file handle.
+        if (-not (Test-Path -LiteralPath $lockPath)) { throw 'Inherited maintenance has no host lock.' }
+        $reader = [IO.File]::Open($lockPath, 'Open', 'Read', 'ReadWrite')
+        try { $text = New-Object IO.StreamReader($reader); $heldOwner = $text.ReadToEnd() }
+        finally { $reader.Dispose() }
+        if ($heldOwner -cne $inherited) { throw 'Inherited maintenance owner mismatch.' }
+        $probe = $null
+        try { $probe = [IO.File]::Open($lockPath, 'Open', 'ReadWrite', 'Read') } catch [IO.IOException] { }
+        if ($probe) { $probe.Dispose(); throw 'Inherited maintenance host lock is no longer held.' }
+        $saved = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
+        if ($saved.owner -cne $inherited) { throw 'Inherited maintenance marker mismatch.' }
+        return @{ Outer = $false; Owner = $inherited }
+    }
+    [void](New-Item -ItemType Directory -Path $directory -Force)
+    try { $handle = [IO.File]::Open($lockPath, 'OpenOrCreate', 'ReadWrite', 'Read') }
+    catch [IO.IOException] { throw 'Another project maintenance operation is running.' }
+    $owner = if ($RecoverOwner) { $RecoverOwner } else { [guid]::NewGuid().ToString('N') }
+    $context = @{ Outer = $true; Owner = $owner; Handle = $handle; Root = $ProjectRoot; PreviousOwner = $inherited }
+    try {
+        if ($owner -cnotmatch '^[a-f0-9]{32}$') { throw 'Invalid recovery owner.' }
+        $handle.SetLength(0)
+        $bytes = [Text.Encoding]::UTF8.GetBytes($owner)
+        $handle.Write($bytes, 0, $bytes.Length); $handle.Flush()
+        if (Test-Path -LiteralPath $marker) {
+            $saved = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
+            if (-not $RecoverOwner -or $saved.owner -cne $owner) {
+                throw "Maintenance marker retained. Use scripts/recover_maintenance.ps1 with its recorded owner after inspecting recovery state."
+            }
+        } elseif ($RecoverOwner) { throw 'No maintenance marker to recover.' }
+        $state = Get-MaintenanceOperator $ProjectRoot
+        $legacy = $false
+        if ($state -eq 'running') {
+            $status = Invoke-MaintenanceApi $ProjectRoot
+            $legacy = $status.PSObject.Properties.Name -notcontains 'maintenance'
+            if (-not $legacy) {
+                $status = Invoke-MaintenanceApi $ProjectRoot 'begin' $owner
+                if ($status.maintenance.owner -cne $owner) { throw 'Operator did not acquire maintenance.' }
+                if (-not (Test-Path -LiteralPath $marker)) { throw 'Operator recordings mount is not this checkout; maintenance retained in the operator. Refusing local mutation.' }
+            } else {
+                Write-Warning 'First upgrade: old operator cannot exclude starts; stopping it after idle verification before upgrading.'
+                Invoke-MaintenanceDocker @('compose', '-f', (Join-Path $ProjectRoot 'compose.yaml'), 'stop', 'server') | Out-Null
+            }
+        }
+        if (-not (Test-Path -LiteralPath $marker)) {
+            [void](New-Item -ItemType Directory -Path (Split-Path $marker -Parent) -Force)
+            $stream = [IO.File]::Open($marker, 'CreateNew', 'Write', 'None')
+            try {
+                $data = [Text.Encoding]::UTF8.GetBytes((@{owner=$owner} | ConvertTo-Json -Compress))
+                $stream.Write($data, 0, $data.Length)
+            } finally { $stream.Dispose() }
+        }
+        $env:WORKERCAM_MAINTENANCE_OWNER = $owner
+        $context.RequiresUpgrade = $legacy -or $state -eq 'stopped'
+        $context.LegacyWasRunning = $legacy
+        if (($legacy -or $state -eq 'stopped') -and -not $StopOnly -and -not $RecoverOwner) {
+            Invoke-MaintenanceDocker @('compose', '-f', (Join-Path $ProjectRoot 'compose.yaml'), 'up', '-d', '--build', '--wait', '--wait-timeout', '120', 'server') | Out-Null
+            $status = Invoke-MaintenanceApi $ProjectRoot
+            if ($status.PSObject.Properties.Name -notcontains 'maintenance' -or $status.maintenance.owner -cne $owner) {
+                Invoke-MaintenanceDocker @('compose', '-f', (Join-Path $ProjectRoot 'compose.yaml'), 'stop', 'server') | Out-Null
+                throw 'Replacement does not honor maintenance; left stopped. Camera unchanged.'
+            }
+        }
+        Write-Host "Maintenance owner: $owner"
+        return $context
+    } catch {
+        $env:WORKERCAM_MAINTENANCE_OWNER = $inherited
+        $handle.Dispose()
+        throw
+    }
+}
+
+function Exit-ProjectMaintenance {
+    param($Context, [bool]$Success)
+    if (-not $Context -or -not $Context.Outer) { return }
+    try {
+        if ($Success) {
+            $marker = Join-Path $Context.Root 'recordings/.maintenance.json'
+            $saved = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
+            if ($saved.owner -cne $Context.Owner) { throw 'Cannot release another maintenance owner.' }
+            if ((Get-MaintenanceOperator $Context.Root) -eq 'running') {
+                $status = Invoke-MaintenanceApi $Context.Root 'end' $Context.Owner
+                if ($status.PSObject.Properties.Name -notcontains 'maintenance' -or $null -ne $status.maintenance) {
+                    throw 'Operator did not release maintenance; recovery required.'
+                }
+            } else { Remove-Item -LiteralPath $marker }
+        } else { Write-Warning "Maintenance retained for owner $($Context.Owner). Inspect recovery state before owner-specific recovery." }
+    } finally {
+        $env:WORKERCAM_MAINTENANCE_OWNER = $Context.PreviousOwner
+        $Context.Handle.Dispose()
+    }
+}
+
 function Invoke-NetworkProcess {
     [CmdletBinding()]
     param([string]$FilePath, [string[]]$Arguments, [int]$TimeoutSeconds = 45,
@@ -244,6 +390,135 @@ function Select-LaptopWifi {
         throw "Cannot select a Wi-Fi route to $CameraAddress. Candidates: $($candidates | ConvertTo-Json -Compress). Use -WifiInterfaceIndex; correct VPN/Windows routes if needed."
     }
     return $selected[0]
+}
+
+function Save-PreviousRuntime {
+    param($Container, [string]$Backup)
+    # Inspect the existing container: the edited Compose file cannot recover old mounts.
+    $environment = @{}
+    foreach ($entry in $Container.Config.Env) {
+        $key, $value = $entry -split '=', 2
+        $environment[$key] = $value
+    }
+    $volumes = @()
+    $legacyReady = $true
+    $tokenDigest = $null
+    foreach ($mount in $Container.Mounts) {
+        $source = $mount.Source
+        if ($mount.Destination -eq '/app/.talkback_token') {
+            $legacyReady = $false
+            $saved = Join-Path $Backup '.talkback_token'
+            if (Test-Path -LiteralPath $source -PathType Leaf) {
+                Copy-Item -LiteralPath $source -Destination $saved
+            } else {
+                # Docker can retain a readable bind after its original checkout disappears.
+                try { Invoke-NetworkProcess docker.exe @('cp', "$($Container.Id):/app/.talkback_token", $saved) | Out-Null }
+                catch { Write-Warning 'Legacy runtime token could not be saved; old-release talkback recovery may be unavailable.' }
+            }
+            if (Test-Path -LiteralPath $saved -PathType Leaf) {
+                $value = [IO.File]::ReadAllText($saved).Trim()
+                if ($value -match '^[0-9a-fA-F]{32}$') {
+                    $sha = [Security.Cryptography.SHA256]::Create()
+                    try { $tokenDigest = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($value.ToLowerInvariant()))).Replace('-', '').ToLowerInvariant() }
+                    finally { $sha.Dispose() }
+                    $legacyReady = $true
+                }
+                $source = $saved
+            }
+        }
+        if ($mount.Destination -eq '/app/recordings' -and -not (Test-Path -LiteralPath $source -PathType Container)) {
+            $source = Join-Path $Backup 'recordings'
+            [void](New-Item -ItemType Directory -Path $source)
+            Invoke-NetworkProcess docker.exe @('cp', "$($Container.Id):/app/recordings/.", $source) | Out-Null
+        }
+        if ($mount.Type -eq 'volume') { $source = $mount.Name }
+        $volume = @{ type = $mount.Type; source = $source; target = $mount.Destination; read_only = -not $mount.RW }
+        if ($mount.Type -eq 'bind') { $volume.bind = @{ create_host_path = $false } }
+        $volumes += $volume
+    }
+    $ports = @()
+    foreach ($property in $Container.HostConfig.PortBindings.PSObject.Properties) {
+        $port, $protocol = $property.Name -split '/'
+        foreach ($binding in $property.Value) {
+            $ports += @{ target = [int]$port; published = $binding.HostPort; host_ip = $binding.HostIp; protocol = $protocol }
+        }
+    }
+    $service = @{ image = $Container.Image; command = @($Container.Config.Cmd); entrypoint = $Container.Config.Entrypoint
+        environment = $environment; volumes = $volumes; ports = $ports
+        working_dir = $Container.Config.WorkingDir; user = $Container.Config.User
+        restart = $Container.HostConfig.RestartPolicy.Name; init = $Container.HostConfig.Init
+        logging = @{ driver = $Container.HostConfig.LogConfig.Type; options = $Container.HostConfig.LogConfig.Config }
+        stop_grace_period = '2m' }
+    if ($Container.Config.Healthcheck) {
+        $health = $Container.Config.Healthcheck
+        $service.healthcheck = @{ test = @($health.Test); interval = "$($health.Interval)ns"; timeout = "$($health.Timeout)ns"
+            start_period = "$($health.StartPeriod)ns"; retries = $health.Retries }
+    }
+    $configuration = @{ name = 'maix-cam-server'; services = @{ server = $service } }
+    $named = @{}
+    foreach ($mount in $Container.Mounts) {
+        if ($mount.Type -eq 'volume') { $named[$mount.Name] = @{ external = $true; name = $mount.Name } }
+    }
+    if ($named.Count) { $configuration.volumes = $named }
+    $path = Join-Path $Backup 'rollback.compose.json'
+    [IO.File]::WriteAllText($path, ($configuration | ConvertTo-Json -Depth 20))
+    return @{ Path = $path; LegacyReady = $legacyReady; TokenDigest = $tokenDigest }
+}
+
+function Test-HostUdpListeners {
+    [CmdletBinding()]
+    param([int[]]$Ports = @(8004, 8005))
+    if ($env:OS -ne 'Windows_NT') { return $true }
+    $hasGetNetUdp = [bool](Get-Command Get-NetUDPEndpoint -ErrorAction SilentlyContinue)
+    foreach ($port in $Ports) {
+        $bound = $false
+        if ($hasGetNetUdp) {
+            try {
+                $endpoints = @(Get-NetUDPEndpoint -LocalPort $port -ErrorAction Stop)
+                if ($endpoints.Count -gt 0) { $bound = $true }
+            } catch {
+                try {
+                    $output = & netstat.exe -ano -p udp 2>$null
+                    if ($output -match ":$port\s") { $bound = $true }
+                } catch { }
+            }
+        } else {
+            try {
+                $output = & netstat.exe -ano -p udp 2>$null
+                if ($output -match ":$port\s") { $bound = $true }
+            } catch { }
+        }
+        if (-not $bound) { return $false }
+    }
+    return $true
+}
+
+function Confirm-HostUdpListeners {
+    [CmdletBinding()]
+    param(
+        [string]$ProjectRoot,
+        [int[]]$Ports = @(8004, 8005)
+    )
+    if ($env:OS -ne 'Windows_NT') { return }
+    if (-not $ProjectRoot) { $ProjectRoot = (Split-Path -Parent $PSScriptRoot) }
+    if (-not (Test-HostUdpListeners -Ports $Ports)) {
+        $maintenance = Enter-ProjectMaintenance $ProjectRoot
+        $success = $false
+        try {
+        Write-Host "Windows host UDP listener ($($Ports -join ', ')) missing; checking recording status and recreating container..."
+        & (Join-Path $ProjectRoot 'stop_docker_pc.ps1') -CheckOnly
+        $composeFile = Join-Path $ProjectRoot 'compose.yaml'
+        & docker compose -f $composeFile up -d --force-recreate --no-deps server
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Docker recreate failed while recovering UDP return listeners.'
+        }
+        if (-not (Test-HostUdpListeners -Ports $Ports)) {
+            throw "Windows host UDP listener ($($Ports -join ', ')) remains missing after container recreation."
+        }
+        Write-Host "Recreated container; host UDP listeners verified ($($Ports -join ', '))."
+        $success = $true
+        } finally { Exit-ProjectMaintenance $maintenance $success }
+    }
 }
 
 Export-ModuleMember -Function *
