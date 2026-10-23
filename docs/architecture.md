@@ -187,9 +187,9 @@ stack. Worker #12 is synthetic demo content; Worker #07 uses the physical camera
 
 ## Startup and preserved configuration
 
-`run_all.ps1` coordinates startup; `deploy_pc.ps1` builds/starts the single Compose
+`run_all.ps1 -WifiSsid <SSID> -HeadsetMac <MAC>` runs a full fresh paired reinstall; `deploy_pc.ps1` builds/starts the single Compose
 service and verifies health plus Windows HTTP access. `deploy_maix.ps1` installs
-camera programs/settings with backups. `stop_docker_pc.ps1` safely stops the PC
+camera programs/settings without backups. `stop_docker_pc.ps1` safely stops the PC
 service after recording/finalization completes.
 
 On MaixCAM, the app launcher manages video. The boot template prepares and verifies

@@ -1,5 +1,6 @@
+#Requires -RunAsAdministrator
 [CmdletBinding()]
-param([switch]$Build, [switch]$CheckOnly, [switch]$Recreate)
+param([switch]$Build, [switch]$CheckOnly, [switch]$Recreate, [switch]$NoCache)
 
 $ErrorActionPreference = 'Stop'
 Push-Location $PSScriptRoot
@@ -44,6 +45,12 @@ try {
     Write-Host '[PC 3/5] Checking port conflicts and recording status...'
     & (Join-Path $PSScriptRoot 'stop_docker_pc.ps1') -CheckOnly
     if ($CheckOnly) { Write-Host 'PC preflight passed.'; return }
+    $cameraCommand = @($service.command)
+    $cameraIndex = [Array]::IndexOf($cameraCommand, '--maix-ip')
+    if ($cameraIndex -lt 0 -or $cameraIndex + 1 -ge $cameraCommand.Count) {
+        throw 'Compose command is missing --maix-ip for the camera firewall rule.'
+    }
+    Set-HeadsetFirewallRule $cameraCommand[$cameraIndex + 1]
     $maintenance = Enter-ProjectMaintenance $PSScriptRoot
     New-Item -ItemType Directory -Force -Path recordings | Out-Null
     $upOptions = @('up', '-d', '--wait', '--wait-timeout', '120')
@@ -51,6 +58,11 @@ try {
     if ($Recreate) { $upOptions += '--force-recreate' }
     Write-Host '[PC 4/5] Building/starting Docker service and waiting for container health...'
     if ($Build) { Write-Host 'The first build downloads images and dependencies and can take several minutes.' }
+    if ($NoCache) {
+        & docker @composeOptions build --no-cache server
+        if ($LASTEXITCODE -ne 0) { throw 'Fresh Docker build failed; fix the error and rerun deployment.' }
+        $upOptions = @($upOptions | Where-Object { $_ -ne '--build' })
+    }
     & docker @composeOptions @upOptions server
     if ($LASTEXITCODE -ne 0) {
         throw 'Docker deployment failed. Run: docker compose logs --tail 80 server'

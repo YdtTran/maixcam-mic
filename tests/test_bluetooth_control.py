@@ -16,6 +16,28 @@ from pc.operator_server import main as operator_main
 
 
 class BluetoothControlTests(unittest.TestCase):
+    def test_volume_targets_selected_headset_playback_and_reads_actual_level(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = Mock(return_value=(0, "Mono: Playback 8 [53%] [on] Capture 15 [100%] [on]"))
+            control = BluetoothControl(Path(directory) / 'selected', run=run, fixed_mac='AA:BB:CC:DD:EE:FF')
+            self.assertEqual(control.volume(), {'volume': 53})
+            run.assert_called_with(['amixer', '-D', 'bluealsa:DEV=AA:BB:CC:DD:EE:FF', 'sget', 'SCO'], timeout=5)
+            self.assertEqual(control.volume(50), {'volume': 53})
+            run.assert_called_with(['amixer', '-D', 'bluealsa:DEV=AA:BB:CC:DD:EE:FF', 'sset', 'SCO',
+                                    'playback', '50%', 'unmute'], timeout=5)
+            control.playback_profile = 'a2dp'
+            control.volume(100)
+            self.assertEqual(run.call_args.args[0][-4:], ['A2DP', 'playback', '100%', 'unmute'])
+            for value in (-1, 101, True, 1.2, '50'):
+                run.reset_mock()
+                with self.subTest(value=value), self.assertRaises(ValueError):
+                    control.volume(value)
+                run.assert_not_called()
+            for result in ((1, 'failed'), (0, 'Capture 15 [100%]')):
+                run.return_value = result
+                with self.assertRaisesRegex(RuntimeError, 'volume unavailable'):
+                    control.volume()
+
     def test_pc_entry_points_ignore_legacy_token_files(self):
         import app
         from tests.test_app import fake_media_executable
@@ -178,8 +200,11 @@ class BluetoothControlTests(unittest.TestCase):
     def test_token_free_camera_scan_and_operator_selection(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "selected"
-            control = BluetoothControl(path, run=lambda command, timeout=20: (
-                0, "Device AA:BB:CC:DD:EE:FF Headset\n" if command[-1] == "devices" else ""))
+            def run(command, timeout=20):
+                if command[0] == 'amixer':
+                    return 0, 'Mono: Playback 8 [53%] [on] Capture 15 [100%] [on]'
+                return 0, "Device AA:BB:CC:DD:EE:FF Headset\n" if command[-1] == "devices" else ""
+            control = BluetoothControl(path, run=run)
             camera = ThreadingHTTPServer(("127.0.0.1", 0), camera_handler(control))
             camera_thread = threading.Thread(target=camera.serve_forever, daemon=True)
             camera_thread.start()
@@ -205,6 +230,16 @@ class BluetoothControlTests(unittest.TestCase):
                 with urlopen(Request(base + "/select", data=body, method="POST")) as response:
                     self.assertEqual(json.load(response)["selected"], "AA:BB:CC:DD:EE:FF")
                 self.assertEqual(path.read_text().strip(), "AA:BB:CC:DD:EE:FF")
+                with urlopen(base + '/volume') as response:
+                    self.assertEqual(json.load(response)['volume'], 53)
+                with urlopen(Request(base + '/volume', data=b'{"volume":50}')) as response:
+                    self.assertEqual(json.load(response)['volume'], 53)
+                for origin in (base, f'http://127.0.0.1:{camera.server_port}/bluetooth'):
+                    for body in (b'{"volume":-1}', b'{"volume":101}', b'{"volume":true}', b'{}',
+                                 b'{"volume":null}', b'[]', b'{', b'{"volume":50,"mac":"other"}'):
+                        with self.subTest(origin=origin, body=body), self.assertRaises(HTTPError) as error:
+                            urlopen(Request(origin + '/volume', data=body))
+                        self.assertEqual(error.exception.code, 400)
             finally:
                 operator.shutdown()
                 operator.server_close()

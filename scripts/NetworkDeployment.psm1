@@ -47,7 +47,7 @@ function Invoke-MaintenanceApi {
 }
 
 function Enter-ProjectMaintenance {
-    param([string]$ProjectRoot, [switch]$StopOnly, [string]$RecoverOwner)
+    param([string]$ProjectRoot, [switch]$StopOnly, [string]$RecoverOwner, [switch]$Fresh)
     $ProjectRoot = [IO.Path]::GetFullPath($ProjectRoot)
     $directory = Join-Path $ProjectRoot '.runtime'
     $lockPath = Join-Path $directory 'mutation.lock'
@@ -77,13 +77,22 @@ function Enter-ProjectMaintenance {
         $handle.SetLength(0)
         $bytes = [Text.Encoding]::UTF8.GetBytes($owner)
         $handle.Write($bytes, 0, $bytes.Length); $handle.Flush()
+        if ($Fresh) {
+            Write-Host 'Hard-fresh reinstall: stopping ALL running Docker containers...'
+            $containers = @(Invoke-MaintenanceDocker @('ps', '--quiet'))
+            if ($containers.Count) { Invoke-MaintenanceDocker (@('stop', '--time', '15') + $containers) | Out-Null }
+            Invoke-MaintenanceDocker @('compose', '--env-file', (Join-Path $ProjectRoot '.env.example'), '-f', (Join-Path $ProjectRoot 'compose.yaml'), 'down', '--remove-orphans') | Out-Null
+            foreach ($path in @($marker, (Join-Path $ProjectRoot 'recordings/.camera-view.json'))) {
+                if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+            }
+        }
         if (Test-Path -LiteralPath $marker) {
             $saved = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
             if (-not $RecoverOwner -or $saved.owner -cne $owner) {
                 throw "Maintenance marker retained. Use scripts/recover_maintenance.ps1 with its recorded owner after inspecting recovery state."
             }
         } elseif ($RecoverOwner) { throw 'No maintenance marker to recover.' }
-        $state = Get-MaintenanceOperator $ProjectRoot
+        $state = if ($Fresh) { 'stopped' } else { Get-MaintenanceOperator $ProjectRoot }
         $legacy = $false
         if ($state -eq 'running') {
             $status = Invoke-MaintenanceApi $ProjectRoot
@@ -156,6 +165,7 @@ function Invoke-NetworkProcess {
     }
     $info = New-Object Diagnostics.ProcessStartInfo
     $info.FileName = $FilePath
+    $info.WorkingDirectory = (Get-Location).ProviderPath
     $info.Arguments = $quoted -join ' '
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
@@ -220,8 +230,12 @@ function Invoke-NetworkProcess {
 }
 
 function New-SshContext {
-    param([string]$KeyPath, [Security.SecureString]$Password)
-    $options = @('-o', 'StrictHostKeyChecking=yes', '-o', 'UpdateHostKeys=no', '-o', 'ConnectTimeout=5',
+    param([string]$KeyPath, [Security.SecureString]$Password, [switch]$Fresh)
+    if (-not $Password -and -not $KeyPath) {
+        $Password = New-Object Security.SecureString
+        'root'.ToCharArray() | ForEach-Object { $Password.AppendChar($_) }
+    }
+    $options = @('-o', 'StrictHostKeyChecking=accept-new', '-o', 'UpdateHostKeys=no', '-o', 'ConnectTimeout=5',
         '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=3')
     $environment = @{}
     $directory = $null
@@ -246,8 +260,15 @@ $credential = Import-Clixml -LiteralPath $env:WORKERCAM_SSH_CREDENTIAL
             "@echo off`r`n`"$powershellPath`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$directory\askpass.ps1`"`r`n")
         $environment = @{ SSH_ASKPASS = (Join-Path $directory 'askpass.cmd'); SSH_ASKPASS_REQUIRE = 'force';
             DISPLAY = 'workercam'; WORKERCAM_SSH_CREDENTIAL = $credentialPath }
-        $options += @('-o', 'BatchMode=no', '-o', 'NumberOfPasswordPrompts=1')
+        $options += @('-o', 'BatchMode=no', '-o', 'NumberOfPasswordPrompts=1', '-o', 'PreferredAuthentications=password')
     } else { $options += @('-o', 'BatchMode=yes') }
+    if ($Fresh) {
+        if (-not $directory) {
+            $directory = Join-Path ([IO.Path]::GetTempPath()) ('workercam-ssh-' + [guid]::NewGuid().ToString('N'))
+            [void](New-Item -ItemType Directory -Path $directory)
+        }
+        $options += @('-o', ('UserKnownHostsFile=' + (Join-Path $directory 'known_hosts')), '-o', 'GlobalKnownHostsFile=NUL')
+    }
     return @{ Options = $options; Environment = $environment; Directory = $directory }
 }
 
@@ -303,6 +324,22 @@ function Test-IPv4 {
         $ip.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork -and
         $ip.GetAddressBytes()[0] -gt 0 -and $ip.GetAddressBytes()[0] -lt 224 -and
         $ip.GetAddressBytes()[0] -ne 127 -and $Address -notlike '169.254.*')
+}
+
+function Set-HeadsetFirewallRule {
+    param([string]$CameraIP)
+    if (-not (Test-IPv4 $CameraIP)) { throw 'Firewall requires a valid camera IPv4 address.' }
+    $displayName = 'MaixCAM headset UDP from camera'
+    $settings = @{ Direction = 'Inbound'; Action = 'Allow'; Protocol = 'UDP';
+        LocalPort = @('8004', '8005'); RemoteAddress = $CameraIP; Profile = 'Any'; Enabled = 'True' }
+    $rules = @(Get-NetFirewallRule -PolicyStore PersistentStore -ErrorAction Stop |
+        Where-Object DisplayName -eq $displayName)
+    if ($rules.Count) {
+        $rules | Set-NetFirewallRule @settings -ErrorAction Stop | Out-Null
+    } else {
+        New-NetFirewallRule -DisplayName $displayName @settings -ErrorAction Stop | Out-Null
+    }
+    Write-Host "Windows Firewall: inbound UDP 8004/8005 allowed from camera $CameraIP (all profiles)."
 }
 
 function ConvertTo-IPv4Number {
@@ -379,6 +416,48 @@ function Find-OpenSshPeers {
     }
 }
 
+function Set-MaixWifi {
+    param($Context, [string]$HostAddress, [string]$WifiSsid,
+        [Security.SecureString]$WifiPassword, [string]$WifiMac)
+    $source = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../maix/setup_wifi.py')).Replace("`r`n", "`n")
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($source))
+    $settings = @{ssid=$WifiSsid;mac=$WifiMac}
+    if ($WifiPassword) {
+        $settings.password = (New-Object Management.Automation.PSCredential('wifi', $WifiPassword)).GetNetworkCredential().Password
+    }
+    $json = $settings | ConvertTo-Json -Compress
+    $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+    $command = "python3 -c 'import base64,io,sys;sys.stdin=io.StringIO(base64.b64decode(sys.stdin.buffer.read()).decode(`"utf-8`"));exec(compile(base64.b64decode(`"$encoded`"), `"wifi-setup`", `"exec`"))' <<'WORKERCAM_WIFI'`n$payload`nWORKERCAM_WIFI"
+    try { return (Invoke-MaixSsh $Context $HostAddress $command -TimeoutSeconds 120 | ConvertFrom-Json) }
+    finally { $settings.Clear(); $json = $null; $payload = $null; $command = $null }
+}
+
+function Get-LaptopWifiSsid {
+    param([int]$InterfaceIndex)
+    $adapter = @(Get-NetAdapter -ErrorAction Stop | Where-Object ifIndex -eq $InterfaceIndex)
+    if ($adapter.Count -ne 1) { throw 'Cannot identify the selected laptop Wi-Fi adapter.' }
+    $output = & netsh.exe wlan show interfaces
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot read connected Wi-Fi SSID. Check Windows Wi-Fi/location permissions.' }
+    $guid = ([guid]$adapter[0].InterfaceGuid).ToString()
+    $blocks = ($output -join "`n") -split '(?m)^\s*GUID\s*:\s*'
+    foreach ($block in $blocks) {
+        if ($block.StartsWith($guid, [StringComparison]::OrdinalIgnoreCase) -and
+                $block -match '(?m)^\s*SSID\s*: ([^\r\n]+)\r?$') {
+            $ssid = $Matches[1]
+            if ([Text.Encoding]::UTF8.GetByteCount($ssid) -le 32) { return $ssid }
+        }
+    }
+    throw 'Selected laptop Wi-Fi has no readable connected SSID. Connect Wi-Fi and check Windows location permissions.'
+}
+
+function Assert-LaptopWifiSsid {
+    param([string]$WifiSsid, [string]$PcIp)
+    $interfaces = @(Get-DeploymentInterfaces | Where-Object { $_.Kind -eq 'Wifi' -and $_.Address -eq $PcIp })
+    if ($interfaces.Count -ne 1 -or (Get-LaptopWifiSsid $interfaces[0].Index) -cne $WifiSsid) {
+        throw 'WifiSsid must exactly match the connected laptop Wi-Fi SSID and PcIp must belong to that adapter.'
+    }
+}
+
 function Select-LaptopWifi {
     param([array]$Interfaces, [string]$CameraAddress, [int]$InterfaceIndex)
     $route = @(Find-NetRoute -RemoteIPAddress $CameraAddress -ErrorAction Stop)
@@ -390,79 +469,6 @@ function Select-LaptopWifi {
         throw "Cannot select a Wi-Fi route to $CameraAddress. Candidates: $($candidates | ConvertTo-Json -Compress). Use -WifiInterfaceIndex; correct VPN/Windows routes if needed."
     }
     return $selected[0]
-}
-
-function Save-PreviousRuntime {
-    param($Container, [string]$Backup)
-    # Inspect the existing container: the edited Compose file cannot recover old mounts.
-    $environment = @{}
-    foreach ($entry in $Container.Config.Env) {
-        $key, $value = $entry -split '=', 2
-        $environment[$key] = $value
-    }
-    $volumes = @()
-    $legacyReady = $true
-    $tokenDigest = $null
-    foreach ($mount in $Container.Mounts) {
-        $source = $mount.Source
-        if ($mount.Destination -eq '/app/.talkback_token') {
-            $legacyReady = $false
-            $saved = Join-Path $Backup '.talkback_token'
-            if (Test-Path -LiteralPath $source -PathType Leaf) {
-                Copy-Item -LiteralPath $source -Destination $saved
-            } else {
-                # Docker can retain a readable bind after its original checkout disappears.
-                try { Invoke-NetworkProcess docker.exe @('cp', "$($Container.Id):/app/.talkback_token", $saved) | Out-Null }
-                catch { Write-Warning 'Legacy runtime token could not be saved; old-release talkback recovery may be unavailable.' }
-            }
-            if (Test-Path -LiteralPath $saved -PathType Leaf) {
-                $value = [IO.File]::ReadAllText($saved).Trim()
-                if ($value -match '^[0-9a-fA-F]{32}$') {
-                    $sha = [Security.Cryptography.SHA256]::Create()
-                    try { $tokenDigest = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($value.ToLowerInvariant()))).Replace('-', '').ToLowerInvariant() }
-                    finally { $sha.Dispose() }
-                    $legacyReady = $true
-                }
-                $source = $saved
-            }
-        }
-        if ($mount.Destination -eq '/app/recordings' -and -not (Test-Path -LiteralPath $source -PathType Container)) {
-            $source = Join-Path $Backup 'recordings'
-            [void](New-Item -ItemType Directory -Path $source)
-            Invoke-NetworkProcess docker.exe @('cp', "$($Container.Id):/app/recordings/.", $source) | Out-Null
-        }
-        if ($mount.Type -eq 'volume') { $source = $mount.Name }
-        $volume = @{ type = $mount.Type; source = $source; target = $mount.Destination; read_only = -not $mount.RW }
-        if ($mount.Type -eq 'bind') { $volume.bind = @{ create_host_path = $false } }
-        $volumes += $volume
-    }
-    $ports = @()
-    foreach ($property in $Container.HostConfig.PortBindings.PSObject.Properties) {
-        $port, $protocol = $property.Name -split '/'
-        foreach ($binding in $property.Value) {
-            $ports += @{ target = [int]$port; published = $binding.HostPort; host_ip = $binding.HostIp; protocol = $protocol }
-        }
-    }
-    $service = @{ image = $Container.Image; command = @($Container.Config.Cmd); entrypoint = $Container.Config.Entrypoint
-        environment = $environment; volumes = $volumes; ports = $ports
-        working_dir = $Container.Config.WorkingDir; user = $Container.Config.User
-        restart = $Container.HostConfig.RestartPolicy.Name; init = $Container.HostConfig.Init
-        logging = @{ driver = $Container.HostConfig.LogConfig.Type; options = $Container.HostConfig.LogConfig.Config }
-        stop_grace_period = '2m' }
-    if ($Container.Config.Healthcheck) {
-        $health = $Container.Config.Healthcheck
-        $service.healthcheck = @{ test = @($health.Test); interval = "$($health.Interval)ns"; timeout = "$($health.Timeout)ns"
-            start_period = "$($health.StartPeriod)ns"; retries = $health.Retries }
-    }
-    $configuration = @{ name = 'maix-cam-server'; services = @{ server = $service } }
-    $named = @{}
-    foreach ($mount in $Container.Mounts) {
-        if ($mount.Type -eq 'volume') { $named[$mount.Name] = @{ external = $true; name = $mount.Name } }
-    }
-    if ($named.Count) { $configuration.volumes = $named }
-    $path = Join-Path $Backup 'rollback.compose.json'
-    [IO.File]::WriteAllText($path, ($configuration | ConvertTo-Json -Depth 20))
-    return @{ Path = $path; LegacyReady = $legacyReady; TokenDigest = $tokenDigest }
 }
 
 function Test-HostUdpListeners {

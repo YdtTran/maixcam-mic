@@ -140,6 +140,10 @@ class BluetoothAudioConnector:
             return False
         self._start_bluealsa()
         code, info = self.run(["bluetoothctl", "info", self.mac])
+        if code != 0 and "not available" in info.lower():
+            self.run(["bluetoothctl", "power", "on"])
+            self.run(["bluetoothctl", "--timeout", "10", "scan", "on"], timeout=15)
+            code, info = self.run(["bluetoothctl", "info", self.mac])
         if code != 0:
             print("Headset status unavailable:", info.strip(), flush=True)
             return False
@@ -211,7 +215,7 @@ def main():
     mac = args.fixed_mac or BluetoothControl(args.selection).selected()
     if not mac:
         parser.error("set --fixed-mac once to bind this camera to its headset")
-    control = BluetoothControl(args.selection, fixed_mac=mac)
+    control = BluetoothControl(args.selection, fixed_mac=mac, playback_profile=args.playback_profile)
     connector = (BluetoothAudioConnector(control.fixed_mac, playback_profile="sco", sco_mtu=args.sco_mtu,
                                         recover_stuck_sco=args.recover_stuck_sco)
                  if args.playback_profile == "sco" else BluetoothAudioConnector(control.fixed_mac))

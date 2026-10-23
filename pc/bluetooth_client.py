@@ -11,11 +11,15 @@ class CameraBluetoothClient:
         self.base = f"http://{host}:8765/bluetooth"
         self.open_url = open_url
 
-    def request(self, action, mac=None):
-        if action not in ("status", "clock", "scan", "select"):
+    def request(self, action, mac=None, volume=None):
+        if action not in ("status", "clock", "scan", "select", "volume"):
             raise ValueError("unsupported Bluetooth action")
         body = json.dumps({"mac": mac}).encode() if action == "select" else None
-        method = "GET" if action in ("status", "clock") else "POST"
+        if action == "volume" and volume is not None:
+            if type(volume) is not int or not 0 <= volume <= 100:
+                raise ValueError("volume must be an integer from 0 to 100")
+            body = json.dumps({"volume": volume}).encode()
+        method = "GET" if action in ("status", "clock") or (action == "volume" and volume is None) else "POST"
         request = Request(self.base + "/" + action, data=body, method=method,
                           headers={"Content-Type": "application/json"})
         try:

@@ -42,11 +42,15 @@ def run_command(command, timeout=20):
 
 
 class BluetoothControl:
-    def __init__(self, selection_path=SELECTION_PATH, run=run_command, connect=None, fixed_mac=None):
+    def __init__(self, selection_path=SELECTION_PATH, run=run_command, connect=None, fixed_mac=None,
+                 playback_profile="sco"):
         self.selection_path = Path(selection_path)
         self.run = run
         self.connect = connect
         self._scanned_devices = []
+        if playback_profile not in ("sco", "a2dp"):
+            raise ValueError("invalid playback profile")
+        self.playback_profile = playback_profile
         if fixed_mac is not None and not MAC.fullmatch(fixed_mac):
             raise ValueError("invalid fixed Bluetooth address")
         self.fixed_mac = fixed_mac.upper() if fixed_mac else None
@@ -110,6 +114,22 @@ class BluetoothControl:
         return {"selected": mac, "connected": code == 0 and "Connected: yes" in output,
                 "fixed": bool(self.fixed_mac)}
 
+    def volume(self, value=None):
+        if value is not None and (type(value) is not int or not 0 <= value <= 100):
+            raise ValueError("volume must be an integer from 0 to 100")
+        mac = self.selected()
+        if not mac:
+            raise RuntimeError("Connect the camera earbuds before adjusting volume")
+        command = ["amixer", "-D", "bluealsa:DEV=" + mac]
+        control = self.playback_profile.upper()
+        command += (["sget", control] if value is None else
+                    ["sset", control, "playback", str(value) + "%", "unmute"])
+        code, output = self.run(command, timeout=5)
+        levels = [int(level) for level in re.findall(r"Playback \d+ \[(\d+)%\]", output)]
+        if code or not levels or any(not 0 <= level <= 100 for level in levels):
+            raise RuntimeError("Earbud volume unavailable; check the headset connection and camera mixer")
+        return {"volume": round(sum(levels) / len(levels))}
+
 
 def make_handler(control):
     class Handler(BaseHTTPRequestHandler):
@@ -126,19 +146,28 @@ def make_handler(control):
                 return self._json(200, {"time_ms": int(time.time() * 1000)})
             if self.path == "/bluetooth/status":
                 return self._json(200, control.status())
+            if self.path == "/bluetooth/volume":
+                try:
+                    return self._json(200, control.volume())
+                except (OSError, RuntimeError) as error:
+                    return self._json(503, {"error": str(error)})
             self._json(404, {"error": "not found"})
 
         def do_POST(self):
             try:
                 if self.path == "/bluetooth/scan":
                     return self._json(200, {"devices": control.scan(), **control.status()})
-                if self.path == "/bluetooth/select":
+                if self.path in ("/bluetooth/select", "/bluetooth/volume"):
                     size = int(self.headers.get("Content-Length", "0"))
                     if size < 1 or size > 256:
                         raise ValueError("invalid selection body")
                     body = json.loads(self.rfile.read(size))
                     if not isinstance(body, dict):
                         raise ValueError("invalid selection body")
+                    if self.path.endswith("/volume"):
+                        if set(body) != {"volume"} or type(body["volume"]) is not int:
+                            raise ValueError("volume must be an integer from 0 to 100")
+                        return self._json(200, control.volume(body["volume"]))
                     return self._json(200, control.select(body.get("mac")))
             except (ValueError, TypeError, json.JSONDecodeError) as error:
                 return self._json(400, {"error": str(error)})

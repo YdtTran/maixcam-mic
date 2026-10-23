@@ -947,3 +947,14 @@ td strong {
   .video-header { height: 64px; }
   .video-body { max-height: calc(100vh - 355px); }
 }
+
+.earbud-volume {
+  border-top: 1px solid var(--border);
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+  font-size: 12px;
+}
+.earbud-volume label { display: grid; gap: 8px; }
+.earbud-volume input { width: 100%; }
+.earbud-volume p { color: #657286; }

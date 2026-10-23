@@ -205,6 +205,23 @@ class BluetoothAudioConnectorTests(unittest.TestCase):
             self.assertFalse(connector.attempt())
         self.assertFalse(any(c[1] in ("pair", "trust", "connect") for c in commands))
 
+    def test_fresh_headset_is_discovered_before_pairing(self):
+        commands = []
+        def run(command, timeout=20):
+            commands.append(command)
+            if command[1] == "info":
+                if sum(c[1] == "info" for c in commands) == 1:
+                    return 1, "Device 28:52:E0:16:73:CE not available"
+                return 0, "Paired: no\nTrusted: no\nConnected: no"
+            return 0, ""
+        with tempfile.TemporaryDirectory() as directory:
+            connector = BluetoothAudioConnector("28:52:E0:16:73:CE", run=run,
+                                                config_path=Path(directory) / "alsa")
+            self.assertTrue(connector.attempt())
+        scan = ["bluetoothctl", "--timeout", "10", "scan", "on"]
+        pair = ["bluetoothctl", "pair", "28:52:E0:16:73:CE"]
+        self.assertLess(commands.index(scan), commands.index(pair))
+
     def test_failed_reconnects_back_off_and_success_restores_normal_poll(self):
         connector = Mock()
         connector.attempt.side_effect = [False, False, False, False, False, True]

@@ -3,7 +3,7 @@
 WorkerCam lets you watch the MaixCAM camera, hear the worker through their
 Bluetooth earbuds, speak back to them, and save recordings from your Windows PC.
 
-Follow this guide to **update or reinstall an existing WorkerCam system**,
+Follow this guide to **install or completely reinstall WorkerCam**,
 including after changing Wi-Fi or moving to another laptop. Automatic setup
 finds the network addresses for you.
 
@@ -18,40 +18,39 @@ You need:
 - A Windows PC with internet access to download software components.
 - The complete WorkerCam project folder, extracted from its ZIP file if supplied.
   Keep it somewhere permanent, for example `C:\WorkerCam`.
-- A MaixCAM already prepared for WorkerCam, with its usual Bluetooth earbuds.
+- A MaixCAM with MaixPy firmware, USB networking, SSH, BlueZ/BlueALSA, FFmpeg and ALSA tools; WorkerCam need not already be installed.
+- The Bluetooth MAC address of the earbuds, supplied as `-HeadsetMac`. For this unit: `6C:16:29:7B:00:D4` (EDIFIER X2 Plus).
 - A USB **data cable** connecting the camera to the PC. A charging-only cable
   will not work.
-- The camera and PC connected to the same Wi-Fi network. Power on the camera
-  and take the powered-on earbuds out of their case.
-- The camera login details supplied by your installer.
+- The PC connected to the required Wi-Fi network and its Wi-Fi password ready.
+  Power on the camera and take the powered-on earbuds out of their case. Setup
+  joins the camera to that same network over USB.
+- Camera SSH enabled with the standard `root` username and `root` password.
+  Setup supplies these automatically.
 
-**Changing Wi-Fi?** Connect the camera to the new Wi-Fi first, using your
-installer's camera instructions, or ask them to help. The deployment command
-finds addresses; it does not connect the camera to a new Wi-Fi network.
+**Changing Wi-Fi?** Connect the PC to the required Wi-Fi first. Supply that
+exact network name as `-WifiSsid` and enter its password at setup. Over USB,
+setup connects MaixCAM to the same Wi-Fi and saves it across reboot. Using the
+same SSID is required; setup refuses a different network name.
 
 **Before updating:** stop any recording in WorkerCam and wait until
 **Finalizing...** disappears. Keep USB connected throughout setup.
 
-**Keep your existing files.** When replacing project files with an update,
-retain `.env`, `.runtime`, and `recordings` in the project
-folder. These hold settings, private recovery information and videos.
+**Every setup is a hard-fresh application reinstall.** It stops **all running
+Docker containers on this PC**, removes this project's container, resets the PC
+configuration and camera view, stops camera application processes, overwrites the
+camera programs/settings, reboots it and rebuilds the PC image without cache.
+No application backup or automatic rollback is made. Finish recordings first;
+an interrupted recording may be incomplete. Existing video files are retained.
 
-**One-time paired update:** this release uses TB3 talkback. Run the combined
-`scripts/deploy.ps1` workflow to update PC and camera together. An older release
-on either side cannot provide talkback with TB3. Recovery snapshots retain any
-usable legacy token privately; missing legacy material does not block the new
-release, but may prevent complete old-release talkback recovery. Active legacy
-token files are removed only after both new sides and media pass verification.
-
-**Moving to another laptop?** No application token needs copying. Set up the
-camera password again in step 3;
-the saved password file from another laptop cannot be reused. Stop WorkerCam on
+**Moving to another laptop?** No application token or saved camera password
+needs copying. Setup uses the standard camera login automatically. Stop WorkerCam on
 the old PC before redeploying. The camera sends its microphone sound to one PC,
 so redeployment switches that destination to the new laptop.
 
-This procedure updates a prepared camera. A brand-new or factory-reset camera
-needs the [initial camera preparation](docs/docker-run-guide.md) completed by
-your installer first, including Wi-Fi, USB networking and headset setup.
+A camera needs the firmware components listed above. This installs WorkerCam;
+it does not flash firmware or install Docker/Windows drivers. See the
+[firmware prerequisites](docs/docker-run-guide.md).
 
 ## 2. Prepare Windows and open PowerShell
 
@@ -139,15 +138,17 @@ In Windows Settings, search for **Optional features**. Find **OpenSSH Client**
 in the installed features. If missing, use **Add a feature** or **View features**
 to install it. You need the Client, not the Server.
 
-Windows may ask for administrator approval during preparation. Ordinary
-WorkerCam deployment runs in a normal PowerShell window. You do not need Python,
+WorkerCam deployment requires **PowerShell → Run as administrator** so it can
+allow the camera's microphone packets through Windows Firewall. You do not need Python,
 Node.js or separate video tools.
 
 ### Open PowerShell in the project folder
 
 1. Open the WorkerCam project folder in File Explorer. You should see
    `run_all.ps1`, `deploy_pc.ps1`, and the `scripts` folder.
-2. Click File Explorer's address bar, type `powershell`, and press **Enter**.
+2. Open Start, search for **PowerShell**, right-click it and select
+   **Run as administrator**. Run `Set-Location 'C:\WorkerCam'`, replacing
+   `C:\WorkerCam` with the full path of your project folder.
 3. Paste these commands and press **Enter**:
 
 ```powershell
@@ -162,57 +163,35 @@ installation, close PowerShell and open it again from the project folder.
 whole line. This allows that PowerShell run to execute the project scripts
 without changing your permanent Windows script policy.
 
-## 3. Set up camera access — once per laptop and Windows account
+## 3. Camera access is automatic
 
-Skip this section if this Windows account already deploys this camera successfully.
+Setup uses the camera's standard SSH login: **username `root`, password `root`**.
+You do not need to enter, save or recheck the camera password, including on a new
+laptop. Existing saved camera credential files are not loaded automatically.
 
-### Trust the camera connection
+Keep the camera connected by USB. Each install uses a temporary SSH host-key
+file, so stale keys from earlier installations do not block setup. USB hardware
+identity and the matching Wi-Fi identity are still checked during that run.
 
-Ask your installer for the camera's **USB address**, password and SSH fingerprint.
-The fingerprint identifies the camera when Windows first connects. Use the USB
-address in this command; `10.172.16.1` below is an example:
-
-```powershell
-ssh root@10.172.16.1
-```
-
-If asked whether to continue connecting, compare the displayed fingerprint with
-the one supplied by your installer. Type `yes` only when they match. Enter the
-camera password when asked; no characters appear while you type it.
-
-Once logged in, type `exit` and press **Enter** to return to Windows PowerShell.
-If Windows warns that the camera identification has changed, ask your installer
-to check it before continuing.
-
-### Save the camera password
-
-Paste these three lines into Windows PowerShell:
-
-```powershell
-New-Item -ItemType Directory -Force .runtime | Out-Null
-$credential = Get-Credential -UserName root -Message 'Enter the camera password supplied by your installer'
-$credential | Export-Clixml .runtime\deploy-credential.xml
-```
-
-Enter the camera password in the prompt and confirm. Windows saves it encrypted
-for your account on this PC. Do this again if the password changes.
-
-If your installer supplied an SSH key instead of a password, use the
-[key-based access instructions](scripts/README.md#credentials-once-per-windows-account).
+The Wi-Fi password requested by the setup command below is for the PC's Wi-Fi
+network, separate from the automatic camera login.
 
 ## 4. Redeploy the camera and PC
 
-With Docker Desktop running, USB connected and both devices on Wi-Fi, paste this
-command into PowerShell and press **Enter**:
+With Docker Desktop running, USB connected and the PC on Wi-Fi, replace
+`YOUR_PC_WIFI_SSID` with the exact network name shown in Windows. Run this
+command in administrator PowerShell; enter the Wi-Fi password when prompted
+(this is separate from the camera SSH password):
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& .\scripts\deploy.ps1 -WifiSsid 'YOUR_PC_WIFI_SSID' -HeadsetMac '6C:16:29:7B:00:D4' -WifiPassword (Read-Host 'Wi-Fi password' -AsSecureString)"
 ```
 
-The script finds the camera, checks the connections, updates the saved addresses,
-and installs the camera and PC software when needed. It keeps the camera's
-existing earbuds selection and audio settings. Settings are backed up before
-changes. You do not need to edit network addresses yourself.
+Replace the example headset MAC with your own earbuds' Bluetooth address.
+On a new camera, put the earbuds into pairing mode. The script finds USB/Wi-Fi
+addresses, joins the requested Wi-Fi if needed, and installs both sides using
+SCO duplex, TCP video and multistream recordings. Previous `.env` and camera
+WorkerCam settings are ignored. No local Node or Python installation is needed.
 
 **Wait for it to finish.** The camera may restart and its picture will disappear
 briefly. The PC build may take several minutes, especially the first time.
@@ -225,21 +204,14 @@ Look for this final message:
 Deployment completed successfully.
 ```
 
-`UNCHANGED (verified)` also means success: the installed version already matched
-and its checks passed. If the script reports failure, use the help section below
-before using the system.
-
-To deliberately reinstall both devices even when nothing has changed, use this
-command **instead of** the normal command:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy.ps1 -Force
-```
+Every run reinstalls both sides, even if the source is unchanged. `-Force` is
+retained only for older commands and is no longer necessary. If setup fails,
+fix the printed error and rerun the same command; it does not restore old code.
 
 To check preparation without installing or restarting anything:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy.ps1 -DryRun
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy.ps1 -WifiSsid 'YOUR_PC_WIFI_SSID' -HeadsetMac '6C:16:29:7B:00:D4' -DryRun
 ```
 
 A successful dry run only confirms preparation checks. Complete normal deployment
@@ -260,6 +232,17 @@ and the picture/sound checks below before using the system.
    **Finalizing...** to finish. Open **Recordings**, play the test and check it.
 
 The standard setup allows both people to speak and listen at the same time.
+Talk uses the PC's communications microphone when available (for example, its
+Bluetooth headset microphone), falling back to the default input when that
+device is unavailable. Check Windows' communications microphone selection if
+live speech is silent even though a test tone works.
+
+To adjust sound in the camera earbuds, open **Live Workers**, select the camera worker, and in **Actions**
+move **Earbud playback volume** (0–100%), then click **Apply earbud volume**.
+The displayed result reflects the earbuds' actual volume steps. This controls
+Talk playback in the camera earbuds; it does not change microphone input or
+laptop speaker volume. At 100%, the hardware mixer is already at its maximum.
+
 Earbud microphone sound is telephone quality. If your installer selected the
 alternative audio mode, listening pauses while you hold **Talk**.
 
@@ -274,12 +257,11 @@ For normal use on the same network, turn on the camera and earbuds, open Docker
 Desktop, then run this from the project folder:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run_all.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run_all.ps1 -WifiSsid 'YOUR_PC_WIFI_SSID' -HeadsetMac '6C:16:29:7B:00:D4'
 ```
 
-This starts the PC software and opens the browser. You do not need to reinstall
-the camera each day. After moving to another network or laptop, repeat the
-redeployment steps above with USB connected.
+This runs the same complete fresh reinstall and opens the browser after success.
+Keep USB connected. Supply `-WifiPassword` as in section 4 when changing Wi-Fi.
 
 To shut down, stop recording and wait for finalization, then run:
 
@@ -312,18 +294,20 @@ about 691 MB per hour. See [recording details](docs/multistream-recording.md).
 | Problem | What to do |
 | --- | --- |
 | Docker is unavailable | Open Docker Desktop and wait for its engine to start. Retry the command. |
-| Scripts are blocked | Copy the complete command, starting with `powershell.exe -NoProfile -ExecutionPolicy Bypass -File`. If your organization's policy still blocks it, ask its IT team. |
+| Scripts are blocked | Copy the complete command, including `-ExecutionPolicy Bypass`. If your organization's policy still blocks it, ask its IT team. |
+| Script requires administrator rights | Open **PowerShell → Run as administrator**, change to the project folder and retry. |
 | Script file cannot be found | Open PowerShell from the folder containing `run_all.ps1` and the `scripts` folder, then retry. |
 | No USB camera or USB network adapter is found | Try a known USB data cable and another USB port. If it persists, ask your installer to check the camera USB network driver and setup. |
-| Camera login is denied | Repeat step 3 with the correct camera password. On a new laptop, create a new saved password file. |
-| Wi-Fi checks fail | Confirm the camera and PC are on the same Wi-Fi and can communicate. Guest Wi-Fi or a VPN may prevent this; ask your installer or network administrator. |
+| Camera login is denied | Setup already uses `root` / `root`. Check camera power and SSH access; ask your installer if the prepared camera rejects that standard login. |
+| Wi-Fi checks fail | Confirm `-WifiSsid` exactly matches the PC Wi-Fi and the supplied password is correct. Keep USB connected. Guest Wi-Fi or a VPN may prevent this; ask your installer or network administrator. |
 | A port is already in use | Close the previous WorkerCam installation on this PC. Ask your installer to stop any older background service. |
 | Deployment seems stuck | Builds can take several minutes. Look for new Docker output. If it fails or stops progressing, collect the details below. |
-| Updating or stopping is refused | Stop recording in the browser and wait for finalization. If the UI reports maintenance, wait for that operation or follow [owner-specific recovery](scripts/README.md#recording-safe-maintenance-and-crash-recovery). |
+| Updating or stopping is refused | Stop recording and wait for finalization before component operations. For a failed combined install, fix the error and rerun the [fresh deployment](scripts/README.md#entry-points-and-checks). |
 | Page is blank or video is black | Check camera power, select Worker #07 and press **Ctrl+F5** to reload. Try **Settings → Diagnose camera**. |
 | No worker sound | Click **Enable audio**, check PC volume and power on the earbuds outside their case. Try the restart below. |
+| `/headsetmic` repeatedly disappears or reports no stream | Windows Firewall may be blocking UDP microphone packets. Rerun automatic deployment as administrator to refresh the rule for the camera's current IP. See [firewall recovery commands and explanation](scripts/README.md#windows-firewall-and-missing-headset-microphone-audio). |
 | Worker cannot hear you | Allow browser microphone access, check the selected PC microphone and hold **Talk** while speaking. If unavailable, ask the installer to check the camera pairing file. |
-| Deployment fails or reports incomplete recovery | Keep USB connected and preserve the printed backup path. Ask your installer for help using the error and logs below. Keep the backups. |
+| Deployment fails or reports incomplete recovery | Keep USB connected, fix the printed error and rerun the same command. No automatic rollback is attempted. |
 
 ### Restart when worker sound is missing
 
@@ -332,7 +316,7 @@ Continue to the second line only after the first succeeds:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\stop_docker_pc.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run_all.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run_all.ps1 -WifiSsid 'YOUR_PC_WIFI_SSID' -HeadsetMac '6C:16:29:7B:00:D4'
 ```
 
 Select **Worker #07**, click **Enable audio**, and check speech in both directions

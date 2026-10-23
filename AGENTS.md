@@ -1,9 +1,72 @@
 # Project Brain and Index
 
 Read this file first when resuming work. It records current decisions and points
-to detailed evidence; session logs preserve the history. Last updated: 2026-10-21.
+to detailed evidence; session logs preserve the history. Last updated: 2026-10-23.
 
 ## Current State and User Decisions
+
+- **Hard-fresh deployment (2026-10-23):** User now prioritizes full reinstall
+  over saved application settings/backups. `scripts/deploy.ps1` and `run_all.ps1`
+  require SSID/headset MAC, stop all running Docker containers on the current
+  engine, reset WorkerCam settings, reinstall/reboot camera and rebuild PC
+  without cache. No application rollback. Two real deployments passed; second
+  started without camera `workercam.env`. User confirmed audible duplex.
+  For fresh-install prerequisites, reruns or verification limits, read the
+  [deployment evidence](docs/sessions/2026-10-23-hard-fresh-reinstall.md).
+
+- **Live worker volume placement (2026-10-23):** Moved earbud playback volume
+  from Settings to the selected physical worker's Live Workers Actions card.
+  Demo workers cannot change the camera mixer; returning to the physical worker
+  reloads actual volume. All 48 source/compiled browser checks passed. Elevated
+  PC-only rebuild/redeployment succeeded; real UI/mixer 100→53→100 and clear
+  live video verified. Docker healthy, headset connected, recording idle,
+  maintenance released. See [placement and live evidence](docs/sessions/2026-10-23-live-worker-volume.md).
+
+- **Earbud playback volume (2026-10-23):** User confirmed the microphone issue
+  was resolved and requested louder/adjustable MaixCAM earbuds. Hardware was
+  already at 100%. Added Settings volume control (0–100%) through bounded PC/
+  camera APIs, targeting only the selected earbud playback mixer. Deployed the
+  camera control modules with a scoped connector restart and rebuilt PC; actual
+  UI/mixer changes and final 100% passed. Capture volume and working Talk input
+  retained. See [volume implementation and live evidence](docs/sessions/2026-10-23-earbud-volume.md).
+
+- **Elevated live deployment (2026-10-23):** User authorized real deployment.
+  Root/root SSH passed over USB/Wi-Fi without a host-key prompt or mismatch.
+  Fixed a proven elevated-launch working-directory bug in the shared child
+  process helper; four focused checks passed. Paired forced deployment passed,
+  including camera reboot/shared SSID, firewall, media, browser rotation,
+  recording/playback/download and 60-second continuity. Follow-up isolated silent
+  Talk to the PC's default Realtek microphone; user selected SOUNDPEATS, its
+  Windows communications input. Talk now requests that input explicitly with
+  default fallback when unavailable; PC rebuilt healthy. User confirmed laptop
+  listening and audible Talk speech. Final rotation 0, recording idle,
+  maintenance released; no Bluetooth reset or re-pairing performed.
+  Before further recovery, read the
+  [live deployment evidence](docs/sessions/2026-10-23-elevated-live-deployment.md).
+
+- **Automatic camera login (2026-10-23):** User guarantees standard root/root
+  camera SSH credentials. Deployment supplies them automatically, ignores stale
+  saved credentials by default and enrolls first-time SSH host keys without a
+  prompt; changed keys still fail. Wi-Fi password input remains separate.
+  For implementation and verification limits, read the
+  [automatic login session](docs/sessions/2026-10-23-automatic-camera-login.md).
+  Implemented; redeployment verification pending. No live services changed.
+
+- **Required shared Wi-Fi setup (2026-10-23):** Camera setup now requires
+  `-WifiSsid` matching the PC's connected Wi-Fi. Supplied `-WifiPassword` enables
+  switching MaixCAM over USB, persistent boot configuration and IP rediscovery.
+  Setup reports/preserves the camera Wi-Fi MAC and checks SSID again after reboot.
+  For command examples, password handling and recovery limits, read the
+  [shared Wi-Fi setup session](docs/sessions/2026-10-23-required-shared-wifi.md).
+  Implemented; redeployment verification pending. No live network changes.
+
+- **Deployment firewall setup (2026-10-23):** Deployment entry points now require
+  administrator PowerShell. Automatic deployment refreshes inbound UDP 8004/8005
+  for the discovered camera Wi-Fi IP; PC deployment uses the Compose camera IP.
+  Dry run/preflight remain read-only. For missing `/headsetmic`, changing camera
+  addresses and verification limits, read the
+  [firewall implementation session](docs/sessions/2026-10-23-deployment-firewall.md).
+  Implemented; redeployment verification pending. No live firewall or service changes.
 
 - **Final hardening redeployment (2026-10-21):** User authorized both devices.
   Maintenance-safe forced deployment succeeded on camera 192.168.1.7 and PC
@@ -560,18 +623,20 @@ This project relays MaixCAM video and Bluetooth headset audio to the WorkerCam A
 
 Run these from the repository root:
 
-- `./run_all.ps1`: start the Docker PC service and open its local browser UI.
+- `./run_all.ps1 -WifiSsid <SSID> -HeadsetMac <MAC>`: hard-fresh reinstall both
+  devices and open the browser. Stops all running Docker containers.
 - `./deploy_pc.ps1 -Build`: build/update the Docker image after changes. Refuses
   active recordings and verifies container health plus Windows HTTP access.
 - `./stop_docker_pc.ps1`: stop only this project's container after recording and
   finalization complete; retains saved recordings.
-- `./deploy_maix.ps1 -MaixHost <address> -PcIp <PC-LAN-IP> -HeadsetMac <MAC>
-  -Reboot`: install camera programs with backups, then activate by reboot.
-  Requires a prepared camera, Windows OpenSSH, verified known_hosts and key or
-  SecureString password. Default SCO;
+- `./deploy_maix.ps1 -WifiSsid <PC-WIFI-SSID> -MaixHost <USB-address> -PcIp <PC-LAN-IP> -HeadsetMac <MAC>
+  -Reboot`: overwrite camera programs/settings without backups, then reboot.
+  Requires a prepared camera and Windows OpenSSH; camera root/root login is
+  automatic. First-time SSH keys are accepted; changed keys fail. Default SCO;
   A2DP fallback requires explicit `-AudioProfile a2dp`.
-- `./scripts/deploy.ps1`: discover USB/Wi-Fi addresses, preserve fixed earbuds,
-  update ignored `.env`, redeploy both devices and verify media. Supports
+- `./scripts/deploy.ps1 -WifiSsid <PC-WIFI-SSID> -HeadsetMac <MAC>`: discover
+  USB/Wi-Fi addresses, reset ignored `.env`, freshly reinstall both devices and
+  verify media. Requires the firmware tools listed in scripts/README.md. Supports
   `-DryRun`, `-Force`, `-Verbose` and explicit interface selection.
 - `docker compose config --quiet`: validate the single Compose configuration.
 - `docker compose logs --tail 80 server`: inspect PC service logs.

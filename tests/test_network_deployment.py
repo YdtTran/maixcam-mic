@@ -11,6 +11,165 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(os.name == "nt", "Windows PowerShell networking")
 class NetworkDeploymentTests(unittest.TestCase):
+    def test_child_process_uses_powershell_location_after_directory_change(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.run_ps(r'''
+Push-Location '__DIRECTORY__'
+try {
+    $shell = Join-Path $PSHOME 'powershell.exe'
+    $location = Invoke-NetworkProcess $shell @('-NoProfile','-NonInteractive','-Command','(Get-Location).Path')
+    if ($location -ne (Get-Location).Path) { throw 'Child process ignored PowerShell location' }
+} finally { Pop-Location }
+'''.replace('__DIRECTORY__', directory))
+
+    def test_camera_ssh_defaults_to_root_without_prompt_and_cleans_helper(self):
+        self.run_ps(r'''
+$context = New-SshContext
+$directory = $context.Directory
+try {
+    $credential = Import-Clixml -LiteralPath $context.Environment.WORKERCAM_SSH_CREDENTIAL
+    if ($credential.UserName -cne 'root' -or $credential.GetNetworkCredential().Password -cne 'root') {
+        throw 'Wrong default camera credentials'
+    }
+    if ('StrictHostKeyChecking=accept-new' -notin $context.Options -or
+        'PreferredAuthentications=password' -notin $context.Options -or
+        $context.Environment.SSH_ASKPASS_REQUIRE -ne 'force') { throw 'Camera login can prompt' }
+    $helper = Get-Content -LiteralPath (Join-Path $directory 'askpass.ps1') -Raw
+    if ($helper.Contains('root')) { throw 'Plaintext credential embedded in helper' }
+} finally { Close-SshContext $context }
+if (Test-Path -LiteralPath $directory) { throw 'Temporary SSH credential retained' }
+$key = Join-Path $env:TEMP ('workercam-key-test-' + [guid]::NewGuid().ToString('N'))
+try {
+    Set-Content -LiteralPath $key 'test key'
+    $context = New-SshContext -KeyPath $key
+    if ($context.Directory -or 'BatchMode=yes' -notin $context.Options) { throw 'Explicit key override was replaced' }
+} finally { Remove-Item -LiteralPath $key }
+''')
+
+    def test_wifi_credentials_use_ssh_stdin_and_preserve_ssid(self):
+        self.run_ps(r'''
+& $module {
+    function script:Invoke-MaixSsh {
+        param($Context,$Address,$Command,$TimeoutSeconds)
+        if ($Command -notmatch "(?s)<<'WORKERCAM_WIFI'\n(.*)\nWORKERCAM_WIFI$") { throw 'Missing stdin payload' }
+        $data = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Matches[1])) | ConvertFrom-Json
+        if ($data.ssid -cne 'Test "WiFi" & $(noop)' -or $data.password -cne 'sample-password' -or
+            $data.mac -ne 'ab:cd:ef:01:23:45' -or $Address -ne '10.9.8.1') { throw 'Credential/identity payload damaged' }
+        if ($Command.Split("`n")[0] -like '*sample-password*') { throw 'Password in command arguments' }
+        return '{"ssid":"Test \"WiFi\" & $(noop)","mac":"ab:cd:ef:01:23:45","ip":"192.0.2.1"}'
+    }
+    $password = New-Object Security.SecureString; 'sample-password'.ToCharArray() | ForEach-Object { $password.AppendChar($_) }
+    $result = Set-MaixWifi @{} '10.9.8.1' 'Test "WiFi" & $(noop)' $password 'ab:cd:ef:01:23:45'
+    if ($result.ip -ne '192.0.2.1') { throw 'Wi-Fi setup result missing' }
+}
+''')
+
+    def test_fresh_ssh_uses_disposable_host_keys(self):
+        self.run_ps(r'''
+$context = New-SshContext -Fresh
+$directory = $context.Directory
+try {
+    $expected = 'UserKnownHostsFile=' + (Join-Path $directory 'known_hosts')
+    if ($expected -notin $context.Options -or 'GlobalKnownHostsFile=NUL' -notin $context.Options) {
+        throw 'Fresh install still uses old saved SSH keys'
+    }
+} finally { Close-SshContext $context }
+if (Test-Path -LiteralPath $directory) { throw 'Fresh SSH state retained' }
+''')
+
+    def test_setup_switches_camera_over_usb_and_dry_run_is_read_only(self):
+        for dry_run in (False, True):
+            with self.subTest(dry_run=dry_run), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.deployment_fixture(root)
+                runner = root / 'run.ps1'
+                if not dry_run:
+                    runner.write_text(runner.read_text().replace(
+                        "& (Join-Path $PSScriptRoot 'scripts/deploy.ps1') @args",
+                        "$wifiPassword = New-Object Security.SecureString; 'sample-password'.ToCharArray() | ForEach-Object { $wifiPassword.AppendChar($_) }\n"
+                        "& (Join-Path $PSScriptRoot 'scripts/deploy.ps1') -WifiPassword $wifiPassword @args"))
+                original = (root / '.env').read_bytes()
+                result = self.run_deployment(root, 'wrong-camera-ssid', ('-DryRun',) if dry_run else ())
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn('sample-password', result.stdout + result.stderr)
+                self.assertIn('ab:cd:ef:01:23:45', result.stdout)
+                if dry_run:
+                    self.assertFalse((root / '.runtime/actions').exists())
+                    self.assertEqual((root / '.env').read_bytes(), original)
+                else:
+                    actions = (root / '.runtime/actions').read_text()
+                    self.assertLess(actions.index('WIFI_SWITCH'), actions.index('CAMERA_DEPLOY'))
+                    self.assertFalse((root / 'recordings/.maintenance.json').exists())
+
+    def test_laptop_ssid_uses_selected_adapter_and_rejects_missing_or_wrong_network(self):
+        self.run_ps(r'''
+& $module {
+    function Get-NetAdapter { [pscustomobject]@{ifIndex=18;InterfaceGuid='11111111-1111-1111-1111-111111111111'} }
+    function netsh.exe {
+        $global:LASTEXITCODE=0
+        @'
+    GUID : 22222222-2222-2222-2222-222222222222
+    SSID : Wrong Adapter
+    GUID : 11111111-1111-1111-1111-111111111111
+    SSID : Test "WiFi" & Network
+    AP BSSID : ab:cd:ef:01:23:45
+'@
+    }
+    if ((Get-LaptopWifiSsid 18) -cne 'Test "WiFi" & Network') { throw 'SSID damaged or wrong adapter' }
+    function Get-DeploymentInterfaces { [pscustomobject]@{Kind='Wifi';Address='192.0.2.2';Index=18} }
+    Assert-LaptopWifiSsid 'Test "WiFi" & Network' '192.0.2.2'
+    foreach ($ip in @('192.0.2.2','192.0.2.9')) {
+        try { Assert-LaptopWifiSsid 'Wrong Network' $ip; throw 'Mismatch accepted' }
+        catch { if ($_.Exception.Message -notlike '*exactly match*') { throw } }
+    }
+    function netsh.exe { $global:LASTEXITCODE=0; 'Wi-Fi is disconnected' }
+    try { Get-LaptopWifiSsid 18; throw 'Missing SSID accepted' }
+    catch { if ($_.Exception.Message -notlike '*no readable connected SSID*') { throw } }
+}
+''')
+
+    def test_setup_rejects_host_or_camera_ssid_mismatch_without_mutations(self):
+        for case in ('wrong-host-ssid', 'wrong-camera-ssid'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.deployment_fixture(root)
+                original = (root / '.env').read_bytes()
+                result = self.run_deployment(root, case)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertRegex(result.stdout + result.stderr, 'SSID|WifiPassword')
+                self.assertEqual((root / '.env').read_bytes(), original)
+                self.assertFalse((root / '.runtime/actions').exists())
+
+    def test_firewall_creates_then_updates_camera_scope_without_duplicates(self):
+        self.run_ps(r'''
+& $module {
+    $script:rule = $null
+    $script:created = 0
+    $script:updated = 0
+    function script:Get-NetFirewallRule { if ($script:rule) { return $script:rule } }
+    function script:New-NetFirewallRule {
+        param($DisplayName,$Direction,$Action,$Protocol,$LocalPort,$RemoteAddress,$Profile,$Enabled,$ErrorAction)
+        if ($DisplayName -ne 'MaixCAM headset UDP from camera' -or $Direction -ne 'Inbound' -or
+            $Action -ne 'Allow' -or $Protocol -ne 'UDP' -or ($LocalPort -join ',') -ne '8004,8005' -or
+            $Profile -ne 'Any' -or $Enabled -ne 'True') { throw 'Wrong firewall settings' }
+        $script:rule = [pscustomobject]@{DisplayName=$DisplayName; RemoteAddress=$RemoteAddress}
+        $script:created++
+    }
+    function script:Set-NetFirewallRule {
+        param([Parameter(ValueFromPipeline)]$InputObject,$Direction,$Action,$Protocol,$LocalPort,$RemoteAddress,$Profile,$Enabled)
+        process { $InputObject.RemoteAddress = $RemoteAddress; $script:updated++ }
+    }
+    Set-HeadsetFirewallRule '192.0.2.1'
+    Set-HeadsetFirewallRule '192.0.2.9'
+    Set-HeadsetFirewallRule '192.0.2.9'
+    if ($script:created -ne 1 -or $script:updated -ne 2 -or $script:rule.RemoteAddress -ne '192.0.2.9') {
+        throw 'Firewall rule duplicated or camera scope stale'
+    }
+    try { Set-HeadsetFirewallRule 'Any'; throw 'Invalid address accepted' }
+    catch { if ($_.Exception.Message -notlike '*valid camera IPv4*') { throw } }
+}
+''')
+
     def test_host_lock_nested_calls_competing_process_and_explicit_recovery(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -170,22 +329,34 @@ try {
         (root / 'scripts').mkdir()
         for name in ('deploy.ps1', 'NetworkDeployment.psm1'):
             shutil.copy2(ROOT / 'scripts' / name, root / 'scripts' / name)
+        # Only the isolated script copy bypasses elevation; external operations are mocked.
+        deploy = root / 'scripts/deploy.ps1'
+        deploy.write_text(deploy.read_text().replace('#Requires -RunAsAdministrator\n', ''))
         for folder in ('maix', 'pc', 'frontend/src', 'frontend/scripts', '.runtime'):
             (root / folder).mkdir(parents=True, exist_ok=True)
+        (root / '.runtime/deploy-credential.xml').write_text('stale credentials must not override root defaults')
         for name in ('Dockerfile', 'compose.yaml', 'app.py', 'mediamtx.yml', 'deploy_pc.ps1', 'stop_docker_pc.ps1'):
             (root / name).write_text('# fixture')
         (root / 'deploy_maix.ps1').write_text(r'''
-param($MaixHost,$PcIp,$HeadsetMac,$AudioProfile,[switch]$Reboot,$DeploymentId)
+param($MaixHost,$PcIp,$HeadsetMac,$WifiSsid,$AudioProfile,[switch]$Reboot,$DeploymentId)
+if ($WifiSsid -cne 'Test WiFi') { throw 'Required SSID not forwarded to camera installer' }
 Add-Content -LiteralPath (Join-Path $PSScriptRoot '.runtime/actions') 'CAMERA_DEPLOY'
 ''')
         (root / 'pc/talkback_protocol.py').write_text('# fixture protocol\n')
+        (root / '.env.example').write_text('MAIX_IP=192.0.2.8\nRTSP_TRANSPORT=tcp\nSTREAM_MODE=video\n')
         (root / '.env').write_text('MAIX_IP=192.0.2.8\nMAIX_USB_IP=10.9.8.1\nOTHER=preserved\n')
         with (root / 'scripts/NetworkDeployment.psm1').open('a') as module:
             module.write(r'''
+function Set-HeadsetFirewallRule {
+    param($CameraIP)
+    if ($CameraIP -ne '192.0.2.1') { throw 'Wrong discovered firewall IP' }
+    Add-Content '.runtime/actions' 'FIREWALL_ALLOW'
+}
 function Invoke-MaintenanceDocker {
     param([string[]]$Arguments)
     $call = $Arguments -join ' '
     $marker = Join-Path (Get-Location) 'recordings/.maintenance.json'
+    if ($call -eq 'ps --quiet') { Add-Content '.runtime/actions' 'ALL_STOP'; return 'fixture-container' }
     if ($call -like '*ps --all --quiet server*') { return 'fixture-container' }
     if ($call -like '*inspect --format*') { return 'running' }
     if ($call -like '*exec -T server python*') {
@@ -211,11 +382,24 @@ function Get-DeploymentInterfaces {
 function Get-UsbPeers { return '10.9.8.1' }
 function Find-OpenSshPeers { return '10.9.8.1' }
 function Select-LaptopWifi { return [pscustomobject]@{Address='192.0.2.2';Index=18} }
+function Get-LaptopWifiSsid {
+    if ($env:NETWORK_TEST_CASE -eq 'wrong-host-ssid') { return 'Other WiFi' }
+    return 'Test WiFi'
+}
+function Set-MaixWifi {
+    param($Context,$HostAddress,$WifiSsid,$WifiPassword,$WifiMac)
+    if ($HostAddress -ne '10.9.8.1' -or $WifiSsid -cne 'Test WiFi' -or
+        $WifiMac -ne 'ab:cd:ef:01:23:45' -or -not $WifiPassword) { throw 'Wrong Wi-Fi setup arguments' }
+    Set-Content '.runtime/wifi-joined' 'yes'
+    Add-Content '.runtime/actions' 'WIFI_SWITCH'
+    return [pscustomobject]@{ssid=$WifiSsid;mac=$WifiMac;ip='192.0.2.1'}
+}
 function Invoke-MaixSsh {
     param($Context,$Address,$Command,$TimeoutSeconds)
     if ($env:NETWORK_TEST_CASE -eq 'ssh-failed') { throw 'Permission denied (publickey,password)' }
-    if ($Command -like '*import glob*') {
-        return '{"model":"MaixCAM","wifi":[{"ip":"192.0.2.1","mac":"ab:cd:ef:01:23:45"}],"settings":{"PC_IP":"192.0.2.2","HEADSET_MAC":"aA:bB:cC:dD:eE:fF","AUDIO_PROFILE":"sco"}}'
+    if ($Command -like '*glob, json, pathlib*') {
+        $ssid = if ($env:NETWORK_TEST_CASE -eq 'wrong-camera-ssid' -and -not (Test-Path '.runtime/wifi-joined')) { 'Other WiFi' } else { 'Test WiFi' }
+        return ('{"model":"MaixCAM","wifi":[{"ip":"192.0.2.1","mac":"ab:cd:ef:01:23:45","state":"COMPLETED","ssid":"' + $ssid + '"}],"settings":{"PC_IP":"192.0.2.2","HEADSET_MAC":"aA:bB:cC:dD:eE:fF","AUDIO_PROFILE":"sco"}}')
     }
     if ($Command -like '*hashlib,json,pathlib,re*') {
         if ($env:NETWORK_TEST_CASE -like 'legacy-*') {
@@ -241,7 +425,7 @@ function Invoke-MaixSsh {
     return ''
 }
 function Invoke-NetworkProcess {
-    param($FilePath,$Arguments,$TimeoutSeconds,$InputText,$Environment)
+    param($FilePath,$Arguments,$TimeoutSeconds,$InputText,$Environment,[switch]$StreamOutput)
     $call = $Arguments -join ' '
     if ($call -like '*stop_docker_pc.ps1*' -and $env:NETWORK_TEST_CASE -eq 'recording') { throw 'Stop the recording first' }
     if ($call -like '*stop_docker_pc.ps1*' -and $call -notlike '*-CheckOnly*') {
@@ -307,7 +491,7 @@ function Get-NetTCPConnection { return }
 function Invoke-RestMethod {
     param($Uri,$TimeoutSec)
     if ($Uri -like '*diagnostics') { return [pscustomobject]@{media_ip='192.0.2.1';wifi=@{reachable=$true}} }
-    if ($Uri -like '*/api/bluetooth/status') { return [pscustomobject]@{selected='aA:bB:cC:dD:eE:fF';error=$null} }
+    if ($Uri -like '*/api/bluetooth/status') { return [pscustomobject]@{selected='aA:bB:cC:dD:eE:fF';connected=$true;error=$null} }
     if ($Uri -like '*:8765/bluetooth/status') {
         $protocol = if ($env:NETWORK_TEST_CASE -eq 'mixed-camera') { 'TB2' } else { 'TB3' }
         return [pscustomobject]@{talkback_protocol=$protocol}
@@ -320,7 +504,7 @@ exit $LASTEXITCODE
 ''')
 
     def run_deployment(self, root, case='ready', arguments=()):
-        return subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-File', str(root / 'run.ps1'), *arguments],
+        return subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-File', str(root / 'run.ps1'), '-WifiSsid', 'Test WiFi', '-HeadsetMac', 'aA:bB:cC:dD:eE:fF', *arguments],
                               env={**os.environ, 'NETWORK_TEST_CASE': case}, capture_output=True, text=True, timeout=30)
 
     def test_dry_run_discovers_without_mutating_configuration_or_services(self):
@@ -338,6 +522,18 @@ exit $LASTEXITCODE
             self.assertFalse((root / '.runtime/mutation.lock').exists())
             self.assertFalse((root / 'recordings/.maintenance.json').exists())
 
+    def test_run_all_uses_same_fresh_deployment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.deployment_fixture(root)
+            source = (ROOT / 'run_all.ps1').read_text().replace('#Requires -RunAsAdministrator\n', '')
+            (root / 'run_all.ps1').write_text(source)
+            runner = root / 'run.ps1'
+            runner.write_text(runner.read_text().replace("'scripts/deploy.ps1') @args", "'run_all.ps1') -NoBrowser @args"))
+            result = self.run_deployment(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('CAMERA_DEPLOY', (root / '.runtime/actions').read_text())
+
     def test_release_failure_keeps_marker_and_does_not_claim_success(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -348,7 +544,7 @@ exit $LASTEXITCODE
             self.assertIn('Maintenance release failed', result.stdout)
             self.assertNotIn('Deployment completed successfully', result.stdout)
 
-    def test_deployment_is_idempotent_and_force_redeploys(self):
+    def test_every_run_reinstalls_both_devices_without_backups(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.deployment_fixture(root)
@@ -357,11 +553,12 @@ exit $LASTEXITCODE
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 if not arguments and (root / '.runtime/actions').read_text().count('PC_DEPLOY') == 1:
                     self.assertIn('EARBUDS_MAC=aA:bB:cC:dD:eE:fF', (root / '.env').read_text())
-            self.assertEqual((root / '.runtime/actions').read_text().count('PC_DEPLOY'), 2)
-            self.assertEqual((root / '.runtime/actions').read_text().count('CAMERA_DEPLOY'), 2)
+            self.assertEqual((root / '.runtime/actions').read_text().count('PC_DEPLOY'), 3)
+            self.assertEqual((root / '.runtime/actions').read_text().count('CAMERA_DEPLOY'), 3)
+            self.assertEqual((root / '.runtime/actions').read_text().count('FIREWALL_ALLOW'), 3)
 
-    def test_ssh_and_recording_failures_do_not_change_configuration(self):
-        for case, code in (('ssh-failed', 3), ('recording', 3)):
+    def test_ssh_failure_does_not_change_configuration(self):
+        for case, code in (('ssh-failed', 3),):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 self.deployment_fixture(root)
@@ -371,18 +568,19 @@ exit $LASTEXITCODE
                 self.assertEqual((root / '.env').read_bytes(), original)
                 self.assertFalse((root / '.runtime/actions').exists())
 
-    def test_failed_pc_deployment_restores_config_camera_and_previous_image(self):
+    def test_failed_build_keeps_new_config_and_rerun_needs_no_recovery(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.deployment_fixture(root)
-            original = (root / '.env').read_bytes()
             result = self.run_deployment(root, 'pc-failed')
-            self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
-            self.assertEqual((root / '.env').read_bytes(), original)
-            actions = (root / '.runtime/actions').read_text()
-            self.assertIn('CAMERA_ROLLBACK', actions)
-            self.assertIn('PC_ROLLBACK', actions)
-            self.assertNotIn('SUCCESS', result.stdout)
+            self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+            self.assertNotIn('OTHER=preserved', (root / '.env').read_text())
+            self.assertFalse((root / '.runtime/deploy-backups').exists())
+            self.assertTrue((root / 'recordings/.maintenance.json').exists())
+            self.assertNotIn('ROLLBACK', (root / '.runtime/actions').read_text())
+            result = self.run_deployment(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse((root / 'recordings/.maintenance.json').exists())
 
     def test_missing_headset_return_uses_one_scoped_stop_start(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -391,84 +589,31 @@ exit $LASTEXITCODE
             result = self.run_deployment(root, 'headset-once')
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('refresh Docker UDP forwarding', result.stdout)
-            self.assertEqual((root / '.runtime/actions').read_text().count('PC_STOP'), 2)
+            self.assertEqual((root / '.runtime/actions').read_text().count('PC_STOP'), 1)
 
-    def test_legacy_snapshot_restores_inspected_mount_and_image(self):
-        import json
+    def test_fresh_checkout_ignores_old_config_and_camera_installation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.deployment_fixture(root)
-            secret = '00' * 16
-            (root / '.talkback_token').write_text(secret)
-            result = self.run_deployment(root, 'legacy-failed')
-            self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
-            snapshot = next((root / '.runtime/deploy-backups').glob('*/rollback.compose.json'))
-            service = json.loads(snapshot.read_text())['services']['server']
-            self.assertEqual(service['image'], 'old-image-id')
-            self.assertEqual(service['environment'], {'ORIGINAL': 'kept'})
-            self.assertEqual(service['logging']['options']['max-size'], '10m')
-            self.assertEqual(service['ports'][0]['host_ip'], '127.0.0.1')
-            mount = service['volumes'][0]
-            self.assertEqual(mount['target'], '/app/.talkback_token')
-            self.assertTrue(mount['read_only'])
-            self.assertEqual(Path(mount['source']).read_text(), secret)
-            self.assertNotEqual(Path(mount['source']), root / '.talkback_token')
-            self.assertIn('PC_ROLLBACK', (root / '.runtime/actions').read_text())
-            self.assertIn('restored stopped', result.stdout)
-            self.assertTrue((root / 'recordings/.maintenance.json').exists())
-            self.assertNotIn(secret, result.stdout + result.stderr)
+            (root / '.env').unlink()
+            module = root / 'scripts/NetworkDeployment.psm1'
+            module.write_text(module.read_text().replace('"settings":{"PC_IP":"192.0.2.2","HEADSET_MAC":"aA:bB:cC:dD:eE:fF","AUDIO_PROFILE":"sco"}', '"settings":{}'))
+            result = self.run_deployment(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('EARBUDS_MAC=aA:bB:cC:dD:eE:fF', (root / '.env').read_text())
+            actions = (root / '.runtime/actions').read_text()
+            self.assertLess(actions.index('ALL_STOP'), actions.index('CAMERA_DEPLOY'))
+            self.assertLess(actions.index('CAMERA_DEPLOY'), actions.index('PC_DEPLOY'))
 
-    def test_missing_or_malformed_legacy_material_allows_upgrade_but_reports_rollback(self):
-        for case, content, expected in (('legacy-missing', None, 0), ('legacy-malformed', 'bad', 0), ('legacy-mismatched', '11' * 16, 0),
-                                         ('legacy-missing-failed', None, 6), ('legacy-malformed-failed', 'bad', 6), ('legacy-mismatched-failed', '11' * 16, 6)):
-            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                self.deployment_fixture(root)
-                if content is not None:
-                    (root / '.talkback_token').write_text(content)
-                result = self.run_deployment(root, case)
-                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
-                self.assertIn('talkback recovery unavailable', result.stdout)
-                if expected:
-                    self.assertIn('ROLLBACK INCOMPLETE', result.stdout)
-                    self.assertNotIn('PC_ROLLBACK', (root / '.runtime/actions').read_text())
-
-    def test_mixed_versions_trigger_pair_recovery_before_cleanup(self):
+    def test_mixed_versions_fail_without_rollback_or_success(self):
         for case in ('mixed-camera', 'mixed-pc'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 self.deployment_fixture(root)
-                (root / '.talkback_token').write_text('legacy-ignored')
                 result = self.run_deployment(root, case)
-                self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
-                actions = (root / '.runtime/actions').read_text()
-                self.assertIn('CAMERA_ROLLBACK', actions)
-                self.assertIn('PC_ROLLBACK', actions)
-                self.assertNotIn('CAMERA_TOKEN_CLEANUP', actions)
-                self.assertTrue((root / '.talkback_token').exists())
-
-    def test_successful_migration_retains_private_copy_before_active_cleanup(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            self.deployment_fixture(root)
-            (root / '.talkback_token').write_text('00' * 16)
-            result = self.run_deployment(root, 'legacy-ready')
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            saved = next((root / '.runtime/deploy-backups').glob('*/.talkback_token'))
-            self.assertEqual(saved.read_text(), '00' * 16)
-            self.assertFalse((root / '.talkback_token').exists())
-            self.assertIn('CAMERA_TOKEN_CLEANUP', (root / '.runtime/actions').read_text())
-
-    def test_retained_container_token_is_saved_when_original_checkout_is_gone(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            self.deployment_fixture(root)
-            result = self.run_deployment(root, 'legacy-retained')
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            saved = next((root / '.runtime/deploy-backups').glob('*/.talkback_token'))
-            self.assertEqual(saved.read_text(), '00' * 16)
-            self.assertNotIn('recovery unavailable', result.stdout)
-            self.assertEqual((saved.parent / 'recordings/preserved.mp4').read_text(), 'old-recording-fixture')
+                self.assertEqual(result.returncode, 5, result.stdout + result.stderr)
+                self.assertNotIn('ROLLBACK', (root / '.runtime/actions').read_text())
+                self.assertNotIn('SUCCESS', result.stdout)
 
     def test_cleanup_follows_verification_and_cannot_fail_startup(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -480,7 +625,7 @@ exit $LASTEXITCODE
             self.assertIn('cleanup failed', result.stdout)
             self.assertIn('SUCCESS', result.stdout)
             actions = (root / '.runtime/actions').read_text()
-            self.assertLess(actions.index('PC_STOP'), actions.index('CAMERA_DEPLOY'))
+            self.assertLess(actions.index('ALL_STOP'), actions.index('CAMERA_DEPLOY'))
             self.assertLess(actions.index('PC_DEPLOY'), actions.index('CAMERA_TOKEN_CLEANUP'))
             self.assertTrue((root / '.talkback_token').exists())
 

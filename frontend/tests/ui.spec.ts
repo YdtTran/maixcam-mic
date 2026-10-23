@@ -78,6 +78,7 @@ async function setup(page: Page, fixed = false, baseRotation = 0) {
   let recording = false;
   let saved = false;
   let rotation = 0;
+  let earbudVolume = 100;
   const requests: string[] = [];
   await page.addInitScript(() => {
     class Peer {
@@ -159,6 +160,10 @@ async function setup(page: Page, fixed = false, baseRotation = 0) {
     if (path === "/api/talkback/status") payload = { available: true };
     if (path === "/api/bluetooth/status")
       payload = { selected: "AA:BB:CC:DD:EE:FF", connected: true, fixed };
+    if (path === "/api/bluetooth/volume") {
+      if (route.request().method() === "POST") earbudVolume = route.request().postDataJSON().volume;
+      payload = { volume: earbudVolume };
+    }
     if (path === "/api/bluetooth/scan")
       payload = {
         selected: null,
@@ -520,6 +525,19 @@ test("optional metadata warnings stay separate from capture and clear after rota
 test("physical camera actions use existing APIs; settings retain Bluetooth selection", async ({
   page,
 }) => {
+  await page.addInitScript(() => {
+    const capture = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    navigator.mediaDevices.getUserMedia = (constraints) => {
+      const state = window as unknown as { talkConstraints: MediaStreamConstraints[] };
+      (state.talkConstraints ||= []).push(constraints!);
+      if (typeof constraints?.audio === "object" && constraints.audio.deviceId) {
+        const error = new DOMException("No communications microphone", "OverconstrainedError");
+        Object.defineProperty(error, "constraint", { value: "deviceId" });
+        return Promise.reject(error);
+      }
+      return capture(constraints);
+    };
+  });
   const requests = await setup(page);
   await login(page);
   await expect(page.locator(".live-badge")).toHaveText("● LIVE");
@@ -537,6 +555,12 @@ test("physical camera actions use existing APIs; settings retain Bluetooth selec
   await talk.focus();
   await page.keyboard.down("Space");
   await expect(page.getByRole("button", { name: "Talking..." })).toBeVisible();
+  expect(await page.evaluate(() =>
+    (window as unknown as { talkConstraints: MediaStreamConstraints[] }).talkConstraints[0].audio,
+  )).toMatchObject({ deviceId: { exact: "communications" } });
+  expect(await page.evaluate(() =>
+    (window as unknown as { talkConstraints: MediaStreamConstraints[] }).talkConstraints[1].audio,
+  )).toEqual({ echoCancellation: true, noiseSuppression: true, channelCount: 1 });
   await expect
     .poll(() => requests.includes("/api/talkback/offer"))
     .toBeTruthy();
@@ -696,7 +720,33 @@ test("fixed earbuds show status without device switching controls", async ({ pag
   await expect(page.getByText("These earbuds are bound to MaixCAM and reconnect automatically.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Scan", exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Bluetooth headset")).toHaveCount(0);
+  await expect(page.getByLabel("Earbud playback volume", { exact: true })).toHaveCount(0);
   expect(requests).not.toContain("/api/bluetooth/select");
+});
+
+test("live earbud volume follows the selected physical worker", async ({ page }) => {
+  await setup(page, true);
+  await login(page);
+  const volume = page.getByLabel("Earbud playback volume", { exact: true });
+  await expect(volume).toHaveValue("100");
+  await volume.fill("40");
+  await page.getByRole("button", { name: "Apply earbud volume", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Earbud playback volume set to 40%.");
+  await page.getByLabel("Select worker").selectOption("cam-012");
+  await expect(volume).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Apply earbud volume", exact: true })).toHaveCount(0);
+  await page.getByLabel("Select worker").selectOption("cam-007");
+  await expect(volume).toHaveValue("40");
+});
+
+test("unavailable earbud mixer reports failure without an enabled volume control", async ({ page }) => {
+  await setup(page, true);
+  await page.route("**/api/bluetooth/volume", route => route.fulfill({ status: 503,
+    contentType: "application/json", body: JSON.stringify({error: "Connect the camera earbuds before adjusting volume"}) }));
+  await login(page);
+  await expect(page.getByLabel("Earbud playback volume", { exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Apply earbud volume", exact: true })).toBeDisabled();
+  await expect(page.getByRole("status")).toContainText("Connect the camera earbuds");
 });
 
 

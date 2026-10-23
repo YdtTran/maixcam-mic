@@ -9,8 +9,8 @@ commands in dated session logs are historical evidence, not current instructions
 
 - Windows PC: Docker Desktop with Linux containers, PowerShell and Docker Compose
   supporting `up --wait`. Host networking is not required.
-- Camera installation: Windows OpenSSH `ssh.exe` and `scp.exe`, verified
-  `known_hosts`, and root SSH access.
+- Camera installation: Windows OpenSSH `ssh.exe` and `scp.exe`, and standard
+  root/root SSH access (supplied automatically).
 - Prepared MaixCAM: MaixPy launcher at `/maixapp/apps`, Python 3, BlueZ, BlueALSA,
   FFmpeg, `arecord`, `aplay`, and a compatible Bluetooth headset.
 - Docker reaches `MAIX_IP` over the LAN. The camera sends microphone RTP to the
@@ -24,28 +24,27 @@ select `legacy` explicitly for video-only recordings.
 
 The release uses token-free TB3 for talkback and camera HTTP control. No token
 file, mount or copy step is needed. Update PC and camera together using
-[combined deployment](../scripts/README.md#one-time-tb3-migration). Old versions
+[combined deployment](../scripts/README.md). Old versions
 are incompatible; optional legacy tokens remain private rollback material only.
 
 ## Camera installation
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\deploy_maix.ps1 -MaixHost 10.172.16.1 -PcIp 192.168.1.4 -HeadsetMac 'AA:BB:CC:DD:EE:FF' -HostKey 'SHA256:YOUR_VERIFIED_FINGERPRINT' -Reboot
+powershell -ExecutionPolicy Bypass -Command "& .\deploy_maix.ps1 -WifiSsid 'YOUR_PC_WIFI_SSID' -WifiPassword (Read-Host 'Wi-Fi password' -AsSecureString) -MaixHost 10.172.16.1 -PcIp 192.168.1.4 -HeadsetMac 'AA:BB:CC:DD:EE:FF' -Reboot"
 ```
 
-Replace the addresses and fingerprint. Enter the password at the private prompt,
-or supply `-KeyPath` for an OpenSSH private key, or a SecureString `-Password`.
-Install OpenSSH Client as described in the [Windows setup guide](../README.md#install-openssh-client).
-Verify the camera fingerprint through your installer before saving it in
-`known_hosts`; `-HostKey` checks that saved entry and does not enroll a new host.
-PuTTY `.ppk` keys must be exported to OpenSSH format before use with `-KeyPath`.
-The OpenSSH askpass helper is temporary and removed in `finally`; passwords
-are not printed or passed as command-line values.
+Replace the addresses and SSID. The private prompt is for the Wi-Fi password;
+camera SSH automatically uses root/root. No camera password entry or saved
+credential setup is needed. Install OpenSSH Client as described in the
+[Windows setup guide](../README.md#install-openssh-client).
+New host keys are accepted automatically; changed saved keys still stop setup.
+Explicit OpenSSH `-KeyPath`, SecureString `-Password` and `-HostKey` overrides
+remain supported. The temporary askpass helper is removed on exit; camera
+passwords are not printed or passed as command-line values.
 
-The script stages files in a private camera directory, checks Python/shell syntax,
-and backs up existing files under `/root/workercam-backup-<id>` before installing.
-Backups include `/etc/rc.local`, the camera launcher app and metadata, optional legacy recovery token and
-audio settings. Save the printed backup path for rollback.
+The script stages files, checks Python/shell syntax, stops old WorkerCam camera
+processes and overwrites the installed application without making backups.
+For complete fresh installation use [combined deployment](../scripts/README.md).
 
 It installs the camera app at `/maixapp/apps/maix_rtsp`, sets it as the launcher's
 startup app, and replaces `/etc/rc.local` with the project background template.
@@ -75,10 +74,9 @@ if Docker Desktop drops a port binding while recording is idle. Docker packages
 the compiled interface, Python, FFmpeg and MediaMTX. No local language runtimes
 or media binaries are required.
 
-Routine startup uses `run_all.ps1`, which also opens the browser. Its optional
-`-DeployMaix` path installs and reboots the camera first. Finish recordings before
-either PC or camera updates. Only the Compose service `server` is managed;
-other Docker projects and databases are not modified.
+`run_all.ps1 -WifiSsid <SSID> -HeadsetMac <MAC>` now runs the combined hard-fresh
+workflow and opens the browser. It stops all running containers on the current
+Docker engine. The standalone component tools manage only this project's service.
 
 ## Network and firewall
 

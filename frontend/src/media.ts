@@ -197,8 +197,12 @@ export class Talkback {
   }
   private async connect() {
     try {
+      const audio = { echoCancellation: true, noiseSuppression: true, channelCount: 1 };
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }, video: false,
+        audio: { ...audio, deviceId: { exact: "communications" } }, video: false,
+      }).catch((error: OverconstrainedError) => {
+        if (error.name !== "OverconstrainedError" || error.constraint !== "deviceId") throw error;
+        return navigator.mediaDevices.getUserMedia({ audio, video: false });
       });
       this.stream = stream;
       if (!this.wanted) { stream.getTracks().forEach((track) => track.stop()); return false; }

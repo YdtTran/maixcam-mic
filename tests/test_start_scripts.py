@@ -1,17 +1,46 @@
 """Exercise deployment failures without touching Docker, SSH or the camera."""
 
 import os
+import base64
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class BootTuningTests(unittest.TestCase):
+    def test_installer_requires_matching_camera_ssid_and_mac(self):
+        source = (ROOT / 'deploy_maix.ps1').read_text()
+        check = source.split(". ./workercam.env\npython3 - <<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            net = root / 'net'
+            wifi = net / 'wlan0'
+            (wifi / 'wireless').mkdir(parents=True)
+            (wifi / 'address').write_text('ab:cd:ef:01:23:45\n')
+            ssid = 'Lab "WiFi" & $(noop)'
+            (root / 'workercam.env').write_text('WIFI_SSID_B64=' + base64.b64encode(ssid.encode()).decode() +
+                                               '\nWIFI_MAC=ab:cd:ef:01:23:45\n')
+            check = check.replace("'/sys/class/net'", repr(str(net))).replace("'workercam.env'", repr(str(root / 'workercam.env')))
+            with patch('subprocess.check_output', return_value=f'wpa_state=COMPLETED\nssid={ssid}\n') as command:
+                exec(compile(check, '<installer wifi check>', 'exec'), {})
+                command.assert_called_once_with(['wpa_cli', '-i', 'wlan0', 'status'], text=True)
+            with patch('subprocess.check_output', return_value='wpa_state=COMPLETED\nssid=Other WiFi\n'):
+                with self.assertRaisesRegex(SystemExit, 'laptop Wi-Fi SSID'):
+                    exec(compile(check, '<installer wifi check>', 'exec'), {})
+            (wifi / 'address').write_text('ab:cd:ef:01:23:46\n')
+            with self.assertRaisesRegex(SystemExit, 'Wi-Fi MAC changed'):
+                exec(compile(check, '<installer wifi check>', 'exec'), {})
+
+    def test_deployment_entry_points_require_administrator(self):
+        for name in ('deploy_pc.ps1', 'deploy_maix.ps1', 'run_all.ps1', 'scripts/deploy.ps1'):
+            self.assertEqual((ROOT / name).read_text().splitlines()[0], '#Requires -RunAsAdministrator')
+
     def test_tuning_precedes_bluetooth_and_is_best_effort(self):
         script = (ROOT / "maix/background_services.rc.local").read_text()
         tuning = script[script.index("dmesg -n 4"):script.index('case "${AUDIO_PROFILE')]
@@ -49,7 +78,8 @@ class DeploymentScriptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for source in ROOT.glob("*.ps1"):
-                shutil.copy2(source, root / source.name)
+                # Only isolated copies bypass elevation; every external operation is mocked.
+                (root / source.name).write_text(source.read_text().replace('#Requires -RunAsAdministrator\n', ''))
             (root / "scripts").mkdir()
             shutil.copy2(ROOT / "scripts/NetworkDeployment.psm1", root / "scripts/NetworkDeployment.psm1")
             with (root / "scripts/NetworkDeployment.psm1").open("a") as module:
@@ -86,6 +116,15 @@ function Test-HostUdpListeners {
     }
     return $true
 }
+function Assert-LaptopWifiSsid {
+    param($WifiSsid,$PcIp)
+    if ($WifiSsid -cne 'Test WiFi' -or $PcIp -ne '192.0.2.2') { throw 'Wrong laptop SSID/IP' }
+}
+function Set-MaixWifi {
+    param($Context,$HostAddress,$WifiSsid,$WifiPassword,$WifiMac)
+    $ssid = if ($env:DEPLOY_TEST_CASE -eq 'wrong-ssid') { 'Other WiFi' } else { 'Test WiFi' }
+    return [pscustomobject]@{ssid=$ssid;mac='ab:cd:ef:01:23:45';ip='192.0.2.1'}
+}
 Export-ModuleMember -Function *
 ''')
             for folder in ("maix", "pc"):
@@ -101,6 +140,13 @@ Export-ModuleMember -Function *
             script = r'''
 $ErrorActionPreference = 'Stop'
 function Get-NetTCPConnection { return }
+function Get-NetFirewallRule { return }
+function New-NetFirewallRule {
+    param($DisplayName,$Direction,$Action,$Protocol,$LocalPort,$RemoteAddress,$Profile,$Enabled,$ErrorAction)
+    if ($env:DEPLOY_TEST_CASE -eq 'firewall-failed') { throw 'Firewall denied' }
+    if ($RemoteAddress -ne '192.0.2.1') { throw 'Wrong firewall camera IP' }
+    Write-Host 'FIREWALL_ALLOW'
+}
 $global:recreated = $false
 $global:stopped = $false
 $global:upgraded = $false
@@ -121,7 +167,7 @@ function docker {
         if ($env:DEPLOY_TEST_CASE -eq 'wrong-mode') {
             return '{"services":{"server":{"environment":{"RTSP_TRANSPORT":"udp","STREAM_MODE":"combined"}}}}'
         }
-        return '{"services":{"server":{"environment":{"RTSP_TRANSPORT":"tcp","STREAM_MODE":"video"}}}}'
+        return '{"services":{"server":{"command":["python","app.py","--maix-ip","192.0.2.1"],"environment":{"RTSP_TRANSPORT":"tcp","STREAM_MODE":"video"}}}}'
     }
     if ($call -like '*ps --all --quiet server*') {
         if ($env:DEPLOY_TEST_CASE -ne 'empty') { return 'test-container' }
@@ -207,6 +253,17 @@ try {
             self.assertEqual(code, 0, output)
             self.assertFalse(files['maintenance-retained'])
             self.assertFalse(files['host-lock-created'])
+            self.assertNotIn('FIREWALL_ALLOW', output)
+
+    def test_firewall_precedes_start_and_failure_prevents_mutation(self):
+        code, output, _ = self.run_helper('deploy_pc.ps1')
+        self.assertEqual(code, 0, output)
+        self.assertLess(output.index('FIREWALL_ALLOW'), output.index('DOCKER_UP'))
+        code, output, files = self.run_helper('deploy_pc.ps1', 'firewall-failed')
+        self.assertNotEqual(code, 0, output)
+        self.assertIn('Firewall denied', output)
+        self.assertNotIn('DOCKER_UP', output)
+        self.assertFalse(files['host-lock-created'])
 
     def test_missing_env_preflight_is_read_only_and_initialization_does_not_start(self):
         code, output, files = self.run_helper('deploy_pc.ps1', 'no-env', '-CheckOnly')
@@ -272,21 +329,8 @@ try {
         self.assertIn("RTSP_TRANSPORT=tcp", output)
         self.assertNotIn("DOCKER_UP", output)
 
-    def test_run_all_validates_pc_before_camera_mutation(self):
-        arguments = "-DeployMaix -NoBrowser " + self.camera_arguments()
-        code, output, _ = self.run_helper("run_all.ps1", "recording", arguments)
-        self.assertNotEqual(code, 0, output)
-        self.assertNotIn("CAMERA_PREFLIGHT", output)
-        self.assertNotIn("DOCKER_UP", output)
-
-    def test_run_all_starts_pc_without_reinstalling_camera(self):
-        code, output, _ = self.run_helper("run_all.ps1", arguments="-NoBrowser")
-        self.assertEqual(code, 0, output)
-        self.assertIn("DOCKER_UP", output)
-        self.assertNotIn("CAMERA_PREFLIGHT", output)
-
     def camera_arguments(self):
-        return ("-MaixHost 192.0.2.1 -PcIp 192.0.2.2 -HeadsetMac 'AA:BB:CC:DD:EE:FF' "
+        return ("-WifiSsid 'Test WiFi' -MaixHost 192.0.2.1 -PcIp 192.0.2.2 -HeadsetMac 'AA:BB:CC:DD:EE:FF' "
                 "-HostKey 'SHA256:test' -KeyPath (Join-Path $env:DEPLOY_TEST_ROOT 'test.ppk')")
 
     def test_camera_preflight_or_upload_failure_cannot_install(self):
@@ -298,17 +342,28 @@ try {
                 if case == "preflight-failed":
                     self.assertNotIn("CAMERA_UPLOAD", output)
 
-    def test_camera_installer_stages_settings_and_backs_up_before_replacing(self):
+    def test_camera_installer_stops_old_runtime_without_backup(self):
         code, output, files = self.run_helper("deploy_maix.ps1", arguments=self.camera_arguments())
         self.assertEqual(code, 0, output)
         self.assertIn("CAMERA_INSTALL", output)
         self.assertIn("PC_IP=192.0.2.2", files["captured-camera.env"])
         self.assertIn("AUDIO_PROFILE=sco", files["captured-camera.env"])
+        self.assertIn("WIFI_SSID_B64=VGVzdCBXaUZp", files["captured-camera.env"])
+        self.assertIn("WIFI_MAC=ab:cd:ef:01:23:45", files["captured-camera.env"])
+        self.assertIn("Wi-Fi MAC: ab:cd:ef:01:23:45", output)
         installer = files["captured-installer.sh"]
-        self.assertLess(installer.index('cp -p /etc/rc.local'), installer.index('cp "$name" "/root/$name"'))
+        self.assertLess(installer.index('os.kill(pid, sig)'), installer.index('cp "$name" "/root/$name"'))
+        self.assertNotIn('workercam-backup-', installer)
         self.assertIn("chmod 600 /root/workercam.env", installer)
         self.assertNotIn("workercam.env .talkback_token; do\n    cp", installer)
         self.assertNotIn("__STAGE__", installer)
+
+    def test_camera_rejects_different_ssid_before_upload(self):
+        code, output, _ = self.run_helper('deploy_maix.ps1', 'wrong-ssid', self.camera_arguments())
+        self.assertNotEqual(code, 0, output)
+        self.assertIn('same Wi-Fi SSID', output)
+        self.assertNotIn('CAMERA_UPLOAD', output)
+        self.assertNotIn('CAMERA_INSTALL', output)
 
     def test_camera_deployment_retains_explicit_a2dp_fallback(self):
         code, output, files = self.run_helper("deploy_maix.ps1",
