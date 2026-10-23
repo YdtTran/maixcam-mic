@@ -5,20 +5,13 @@ TCP/video monitoring route, headset RTP receiver and talkback relay remain
 independent of recording. The `legacy` video-only recorder is an explicit fallback.
 Physical A/V synchronization and VLC acceptance have **not** been measured.
 
-## Configure and roll back
+## Installation defaults
 
-After stopping the current recording and waiting for finalization, set
-`RECORDING_MODE=multistream` in the project `.env`, then run:
-
-```powershell
-.\deploy_pc.ps1 -Build
-```
-
-For rollback, finish recording, set `RECORDING_MODE=legacy`, and run
-`./deploy_pc.ps1` again. No camera rollback is necessary. Keep
-`RTSP_TRANSPORT=tcp` and `STREAM_MODE=video`; recording mode is independent of
-live stream selection. The Docker image supplies FFmpeg and builds the UI.
-The deployment helper refuses to update during recording or finalization.
+The [single fresh-install command](../README.md) resets configuration to
+`RECORDING_MODE=multistream`, `RTSP_TRANSPORT=tcp` and `STREAM_MODE=video`.
+It rebuilds the Docker image and retains completed recording media. Finish
+recording and finalization before running it. There is no application rollback.
+The Docker image supplies FFmpeg and builds the interface.
 
 ## Architecture and output
 

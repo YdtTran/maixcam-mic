@@ -1142,7 +1142,7 @@ function EarbudVolume({ notify }: { notify: (value: string) => void }) {
     let active = true;
     setEarbudVolume(null);
     setVolumeError("");
-    void api<{ volume: number }>("/api/bluetooth/volume").then((result) => {
+    void api<{ volume: number }>("/api/bluetooth/capture-volume").then((result) => {
       if (active) setEarbudVolume(result.volume);
     }).catch((error) => { if (active) setVolumeError(message(error)); });
     return () => { active = false; };
@@ -1152,25 +1152,25 @@ function EarbudVolume({ notify }: { notify: (value: string) => void }) {
     setVolumeBusy(true);
     setVolumeError("");
     try {
-      const result = await api<{ volume: number }>("/api/bluetooth/volume", "POST", { volume: earbudVolume });
+      const result = await api<{ volume: number }>("/api/bluetooth/capture-volume", "POST", { volume: earbudVolume });
       setEarbudVolume(result.volume);
-      notify(`Earbud playback volume set to ${result.volume}%.`);
+      notify(`Earbud microphone volume set to ${result.volume}%.`);
     } catch (error) { setVolumeError(message(error)); }
     finally { setVolumeBusy(false); }
   }
   return (
     <div className="earbud-volume">
         <label>
-          Earbud playback volume: {earbudVolume === null ? "Unavailable" : `${earbudVolume}%`}
-          <input aria-label="Earbud playback volume" type="range" min="0" max="100" step="1"
+          Earbud microphone volume: {earbudVolume === null ? "Unavailable" : `${earbudVolume}%`}
+          <input aria-label="Earbud microphone volume" type="range" min="0" max="100" step="1"
             value={earbudVolume ?? 0} disabled={earbudVolume === null || volumeBusy}
             onChange={(event) => setEarbudVolume(Number(event.target.value))} />
         </label>
         <button className="outline" disabled={earbudVolume === null || volumeBusy}
           onClick={() => void saveEarbudVolume()}>
-          {volumeBusy ? "Applying…" : "Apply earbud volume"}
+          {volumeBusy ? "Applying…" : "Apply microphone volume"}
         </button>
-        <p>Controls sound from Talk in the camera earbuds, not microphone input or laptop speaker volume.</p>
+        <p>Microphone sent to the laptop and recordings. 0% mutes; 100% keeps the +50% boost.</p>
         {volumeError && <p role="status">{volumeError}</p>}
     </div>
   );

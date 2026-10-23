@@ -5,6 +5,51 @@ to detailed evidence; session logs preserve the history. Last updated: 2026-10-2
 
 ## Current State and User Decisions
 
+- **Playback volume removed (2026-10-23):** User requested removal of
+  `Earbud playback volume`; PC→MaixCAM Talk should send normally. Removed its
+  UI/API/mixer handler and simplified the retained microphone control. Camera
+  connector updated, PC rebuilt; 52 focused Python and 50 browser checks
+  passed. Real UI absence, retired API 404, 15-second video/mic continuity and
+  Talk signaling passed. Docker healthy, headset connected, maintenance clear.
+  See [removal evidence](docs/sessions/2026-10-23-remove-earbud-playback-volume.md).
+
+- **Working microphone volume control (2026-10-23):** User clarified that
+  setting 0 must silence MaixCAM mic on the laptop; the old slider controlled
+  earbud playback. Added a separate Live Workers microphone control with
+  persistent camera-side software scaling: 0 sends silence, 100 retains +50%
+  gain. Camera modules and PC rebuilt/deployed; 225 Python tests ran (eight
+  skips), 52 browser checks passed. Real browser zero/nonzero measurements and
+  a controlled all-silent worker/mixed recording passed. Maintenance released;
+  mic returned to 100. For mute verification or competing browser writes, read
+  [microphone volume evidence](docs/sessions/2026-10-23-earbud-microphone-volume.md).
+
+- **Earbud microphone gain (2026-10-23):** User confirmed the system works and
+  requested roughly 50% louder earbud capture. Added fixed 1.5 PCM gain with
+  S16 saturation before RTP/RTSP encoding; deployed only the camera microphone
+  sender. 25 focused tests and 15-second real browser video/audio continuity
+  passed; Docker healthy, headset connected, maintenance released. Audible
+  comparison pending. For gain/clipping or redeployment, read the
+  [capture gain evidence](docs/sessions/2026-10-23-earbud-capture-gain.md).
+
+- **Single fresh-install entry point (2026-10-23):** Only `scripts/deploy.ps1`
+  remains executable. Camera install, PC build and safe stop moved into
+  `scripts/NetworkDeployment.psm1`; component/wrapper/recovery scripts removed.
+  README now documents one fresh-install command. Authorized full reinstall on
+  iPhoneYdt passed after fixing optional `finalizing` access under module strict
+  mode; 222 Python tests ran (eight skips). Real browser rotation, Talk signaling,
+  recording/playback/download and 60-second video/audio continuity passed.
+  Docker healthy, headset connected, recording idle, rotation zero, maintenance
+  released; audible user acceptance pending. See
+  [scope and verification](docs/sessions/2026-10-23-single-fresh-install.md).
+
+- **iPhone hotspot recovery (2026-10-23):** Unused `n8n_default` reserved
+  172.20.0.0/16 and blocked Docker access to camera 172.20.10.7. Removed the
+  empty network after saving inspection. One safe PC stop/start restored host
+  UDP8004. Browser video/audio continuity passed for 15 seconds; Docker healthy,
+  headset connected, maintenance released. Added deployment subnet checks.
+  Read [cause and limits](docs/sessions/2026-10-23-iphone-wifi-docker-route.md)
+  before restarting n8n or diagnosing hotspot startup.
+
 - **Hard-fresh deployment (2026-10-23):** User now prioritizes full reinstall
   over saved application settings/backups. `scripts/deploy.ps1` and `run_all.ps1`
   require SSID/headset MAC, stop all running Docker containers on the current
@@ -623,21 +668,10 @@ This project relays MaixCAM video and Bluetooth headset audio to the WorkerCam A
 
 Run these from the repository root:
 
-- `./run_all.ps1 -WifiSsid <SSID> -HeadsetMac <MAC>`: hard-fresh reinstall both
-  devices and open the browser. Stops all running Docker containers.
-- `./deploy_pc.ps1 -Build`: build/update the Docker image after changes. Refuses
-  active recordings and verifies container health plus Windows HTTP access.
-- `./stop_docker_pc.ps1`: stop only this project's container after recording and
-  finalization complete; retains saved recordings.
-- `./deploy_maix.ps1 -WifiSsid <PC-WIFI-SSID> -MaixHost <USB-address> -PcIp <PC-LAN-IP> -HeadsetMac <MAC>
-  -Reboot`: overwrite camera programs/settings without backups, then reboot.
-  Requires a prepared camera and Windows OpenSSH; camera root/root login is
-  automatic. First-time SSH keys are accepted; changed keys fail. Default SCO;
-  A2DP fallback requires explicit `-AudioProfile a2dp`.
-- `./scripts/deploy.ps1 -WifiSsid <PC-WIFI-SSID> -HeadsetMac <MAC>`: discover
-  USB/Wi-Fi addresses, reset ignored `.env`, freshly reinstall both devices and
-  verify media. Requires the firmware tools listed in scripts/README.md. Supports
-  `-DryRun`, `-Force`, `-Verbose` and explicit interface selection.
+- `powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy.ps1 -WifiSsid <SSID> -HeadsetMac <MAC>`:
+  the only deployment script; hard-fresh reinstall both devices, stopping all
+  running Docker containers. `-DryRun` performs read-only discovery. Camera/PC
+  install and recording-safe stop are internal functions in `NetworkDeployment.psm1`.
 - `docker compose config --quiet`: validate the single Compose configuration.
 - `docker compose logs --tail 80 server`: inspect PC service logs.
 - `python -m unittest discover -s tests -v`: run developer Python checks. Local

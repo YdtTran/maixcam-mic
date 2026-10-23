@@ -5,8 +5,8 @@ the Python backend and physical MaixCAM programs are unchanged.
 
 ## Deployment and development
 
-Customer deployment runs entirely in Docker: from the project root, run
-`./deploy_pc.ps1 -Build`, or `./run_all.ps1 -WifiSsid <SSID> -HeadsetMac <MAC>` (full fresh reinstall) to also open the browser.
+Customer deployment uses the single fresh-install command in the
+[Windows setup guide](../README.md), executed from the project root.
 The build packages this interface into the operator image. The page is available
 at http://127.0.0.1:8000; Worker #07 connects to MaixCAM and Worker #12 is a demo.
 See the [customer README](../README.md) for configuration and daily use.

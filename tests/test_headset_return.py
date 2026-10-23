@@ -14,6 +14,17 @@ from maix import headset_mic_stream as mic
 
 
 class CameraPcmuSenderTests(unittest.TestCase):
+    def test_capture_gain_is_fifty_percent_with_saturation_and_silence(self):
+        samples = [-32768, -24000, -1000, -1, 0, 1, 1000, 24000, 32767, 0] * 16
+        frame = struct.pack("<160h", *samples)
+        expected = tuple([-32768, -32768, -1500, -2, 0, 1, 1500, 32767, 32767, 0] * 16)
+        for backend in (mic.audioop, None):
+            with self.subTest(backend=backend), patch.object(mic, "audioop", backend):
+                self.assertEqual(struct.unpack("<160h", mic.amplify_capture(frame)), expected)
+                self.assertEqual(mic.amplify_capture(mic.SILENCE), mic.SILENCE)
+                self.assertEqual(mic.amplify_capture(frame, 0), mic.SILENCE)
+                self.assertEqual(struct.unpack('<160h', mic.amplify_capture(struct.pack('<h', 1000) * 160, 50)), (750,) * 160)
+
     def test_main_retries_network_failure(self):
         with patch.object(sys, "argv", ["headset_mic_stream.py", "--target", "192.0.2.1", "--rtp-port", "8004"]), \
                 patch.dict("os.environ", {"RTSP_TRANSPORT": "udp"}), patch.object(mic.signal, "signal"), \
@@ -109,23 +120,50 @@ class CameraPcmuSenderTests(unittest.TestCase):
                     mic.publish_audio("192.0.2.1", root / "selection", root / "pause", root / "ack", rtp_port=8004)
                 spawn.assert_called_once()
                 self.assertEqual(spawn.call_args.args[0], mic.capture_command("AA:BB:CC:DD:EE:FF"))
-                self.assertEqual(sock.return_value.sendto.call_args.args[0][12:], b"\xce" * 160)
+                self.assertEqual(sock.return_value.sendto.call_args.args[0][12:], b"\xc6" * 160)
                 spawn.return_value.terminate.assert_called_once()
                 sock.return_value.close.assert_called_once()
+
+    def test_live_capture_volume_reload_mutes_even_nonzero_input_and_invalid_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            selection = root / 'selection'
+            selection.write_text('AA:BB:CC:DD:EE:FF')
+            volume = selection.with_suffix('.capture-volume')
+            volume.write_text('100')
+            packets = []
+            def change_volume(_):
+                if len(packets) == 4:
+                    raise KeyboardInterrupt
+                volume.write_text(('0', 'invalid', '50')[len(packets) - 1])
+            with patch.object(mic.subprocess, 'Popen') as spawn, patch.object(mic.os, 'set_blocking', create=True), \
+                    patch.object(mic.os, 'read', return_value=struct.pack('<h', 1000) * 160), \
+                    patch.object(mic.time, 'monotonic', side_effect=range(1000)), \
+                    patch.object(mic.time, 'sleep', side_effect=change_volume), \
+                    patch.object(mic.socket, 'socket') as sock:
+                spawn.return_value.poll.return_value = None
+                sock.return_value.sendto.side_effect = lambda packet, target: packets.append(packet[12:])
+                with self.assertRaises(KeyboardInterrupt):
+                    mic.publish_audio('192.0.2.1', selection, root / 'pause', root / 'ack', rtp_port=8004)
+            self.assertEqual(packets, [b'\xc6' * 160, b'\xff' * 160, b'\xff' * 160,
+                                       bytes([mic.ulaw_table()[750]]) * 160])
 
     def test_explicit_rtsp_mode_keeps_ffmpeg_and_cleans_up(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (root / "selection").write_text("AA:BB:CC:DD:EE:FF")
             with patch.object(mic.subprocess, "Popen") as spawn, patch.object(mic.os, "set_blocking", create=True), \
-                    patch.object(mic.os, "write", return_value=320), \
+                    patch.object(mic.os, "read", return_value=struct.pack("<h", 1000) * 160), \
+                    patch.object(mic.os, "write", return_value=320) as write, \
                     patch.object(mic.time, "sleep", side_effect=KeyboardInterrupt):
                 spawn.return_value.poll.return_value = None
                 with self.assertRaises(KeyboardInterrupt):
                     mic.publish_audio("192.0.2.1", root / "selection", root / "pause", root / "ack", transport="tcp")
-                command = spawn.call_args.args[0]
+                command = spawn.call_args_list[0].args[0]
                 self.assertEqual(command[0], "ffmpeg")
                 self.assertEqual(command[-1], "rtsp://192.0.2.1:8554/headsetmic")
-                spawn.return_value.terminate.assert_called_once()
+                write.assert_called_once_with(spawn.return_value.stdin.fileno(), struct.pack("<h", 1500) * 160)
+                self.assertEqual(spawn.return_value.terminate.call_count, 2)
 
 
 class HeadsetReturnTests(unittest.TestCase):

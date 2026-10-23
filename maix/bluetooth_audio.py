@@ -215,7 +215,7 @@ def main():
     mac = args.fixed_mac or BluetoothControl(args.selection).selected()
     if not mac:
         parser.error("set --fixed-mac once to bind this camera to its headset")
-    control = BluetoothControl(args.selection, fixed_mac=mac, playback_profile=args.playback_profile)
+    control = BluetoothControl(args.selection, fixed_mac=mac)
     connector = (BluetoothAudioConnector(control.fixed_mac, playback_profile="sco", sco_mtu=args.sco_mtu,
                                         recover_stuck_sco=args.recover_stuck_sco)
                  if args.playback_profile == "sco" else BluetoothAudioConnector(control.fixed_mac))

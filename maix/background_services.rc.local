@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Installed by deploy_maix.ps1. Camera video is managed by the Maix app launcher.
+# Installed by scripts/deploy.ps1. Camera video is managed by the Maix app launcher.
 export HOME=/root
 . /root/workercam.env || exit 1
 : "${PC_IP:?Missing PC_IP}" "${HEADSET_MAC:?Missing HEADSET_MAC}"

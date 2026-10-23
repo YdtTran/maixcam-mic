@@ -185,12 +185,12 @@ worker/preferences/demo metadata lives in IndexedDB; login state lives in
 sessionStorage. There is no required server database in the current Compose
 stack. Worker #12 is synthetic demo content; Worker #07 uses the physical camera.
 
-## Startup and preserved configuration
+## Startup and configuration
 
-`run_all.ps1 -WifiSsid <SSID> -HeadsetMac <MAC>` runs a full fresh paired reinstall; `deploy_pc.ps1` builds/starts the single Compose
-service and verifies health plus Windows HTTP access. `deploy_maix.ps1` installs
-camera programs/settings without backups. `stop_docker_pc.ps1` safely stops the PC
-service after recording/finalization completes.
+`scripts/deploy.ps1` is the only executable deployment script. It discovers
+addresses, resets configuration, installs/reboots the camera and builds the PC
+without cache. `scripts/NetworkDeployment.psm1` contains its internal camera,
+PC and recording-safe stop functions. See the [setup command](../README.md).
 
 On MaixCAM, the app launcher manages video. The boot template prepares and verifies
 SCO MTU 120 after controller power-up, before starting Bluetooth/audio clients;

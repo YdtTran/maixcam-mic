@@ -11,6 +11,27 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(os.name == "nt", "Windows PowerShell networking")
 class NetworkDeploymentTests(unittest.TestCase):
+    def test_docker_network_overlap_is_rejected_without_mutation(self):
+        self.run_ps(r'''
+& $module {
+    function script:Invoke-NetworkProcess {
+        param($FilePath, $Arguments)
+        if (($Arguments -join ' ') -eq 'network ls --quiet') { return "fixture-network`nother-network" }
+        if (($Arguments -join ' ') -eq 'network inspect fixture-network other-network') {
+            return '[{"Name":"n8n_default","IPAM":{"Config":[{"Subnet":"172.20.0.0/16"},{"Subnet":"fd00::/64"}]}}]'
+        }
+        throw 'Unexpected Docker mutation'
+    }
+    Assert-DockerNetworkRoute '192.168.1.7'
+    foreach ($address in @('172.20.10.2', '172.20.10.7')) {
+        try { Assert-DockerNetworkRoute $address; throw 'Overlap accepted' }
+        catch {
+            if ($_.Exception.Message -notlike "*n8n_default*172.20.0.0/16*overlaps*") { throw }
+        }
+    }
+}
+''')
+
     def test_child_process_uses_powershell_location_after_directory_change(self):
         with tempfile.TemporaryDirectory() as directory:
             self.run_ps(r'''
@@ -335,18 +356,33 @@ try {
         for folder in ('maix', 'pc', 'frontend/src', 'frontend/scripts', '.runtime'):
             (root / folder).mkdir(parents=True, exist_ok=True)
         (root / '.runtime/deploy-credential.xml').write_text('stale credentials must not override root defaults')
-        for name in ('Dockerfile', 'compose.yaml', 'app.py', 'mediamtx.yml', 'deploy_pc.ps1', 'stop_docker_pc.ps1'):
+        for name in ('Dockerfile', 'compose.yaml', 'app.py', 'mediamtx.yml'):
             (root / name).write_text('# fixture')
-        (root / 'deploy_maix.ps1').write_text(r'''
-param($MaixHost,$PcIp,$HeadsetMac,$WifiSsid,$AudioProfile,[switch]$Reboot,$DeploymentId)
-if ($WifiSsid -cne 'Test WiFi') { throw 'Required SSID not forwarded to camera installer' }
-Add-Content -LiteralPath (Join-Path $PSScriptRoot '.runtime/actions') 'CAMERA_DEPLOY'
-''')
         (root / 'pc/talkback_protocol.py').write_text('# fixture protocol\n')
         (root / '.env.example').write_text('MAIX_IP=192.0.2.8\nRTSP_TRANSPORT=tcp\nSTREAM_MODE=video\n')
         (root / '.env').write_text('MAIX_IP=192.0.2.8\nMAIX_USB_IP=10.9.8.1\nOTHER=preserved\n')
         with (root / 'scripts/NetworkDeployment.psm1').open('a') as module:
             module.write(r'''
+function Install-MaixCamera {
+    param($MaixHost,$PcIp,$HeadsetMac,$WifiSsid,$AudioProfile,[switch]$Reboot,$DeploymentId)
+    if ($WifiSsid -cne 'Test WiFi') { throw 'Required SSID not forwarded to camera installer' }
+    Add-Content '.runtime/actions' 'CAMERA_DEPLOY'
+}
+function Install-PcRuntime {
+    param([switch]$Build,[switch]$Recreate,[switch]$NoCache)
+    if ($Build) {
+        Add-Content '.runtime/actions' 'PC_DEPLOY'
+        if ($env:NETWORK_TEST_CASE -in @('pc-failed','legacy-failed','legacy-missing-failed','legacy-malformed-failed','legacy-mismatched-failed')) { throw 'Simulated Docker build failure' }
+    }
+}
+function Stop-PcRuntime {
+    param([switch]$CheckOnly)
+    if ($env:NETWORK_TEST_CASE -eq 'recording') { throw 'Stop the recording first' }
+    if (-not $CheckOnly) {
+        Add-Content '.runtime/actions' 'PC_STOP'
+        Set-Content '.runtime/return-recovered' 'yes'
+    }
+}
 function Set-HeadsetFirewallRule {
     param($CameraIP)
     if ($CameraIP -ne '192.0.2.1') { throw 'Wrong discovered firewall IP' }
@@ -427,15 +463,6 @@ function Invoke-MaixSsh {
 function Invoke-NetworkProcess {
     param($FilePath,$Arguments,$TimeoutSeconds,$InputText,$Environment,[switch]$StreamOutput)
     $call = $Arguments -join ' '
-    if ($call -like '*stop_docker_pc.ps1*' -and $env:NETWORK_TEST_CASE -eq 'recording') { throw 'Stop the recording first' }
-    if ($call -like '*stop_docker_pc.ps1*' -and $call -notlike '*-CheckOnly*') {
-        Add-Content '.runtime/actions' 'PC_STOP'
-        Set-Content '.runtime/return-recovered' 'yes'
-    }
-    if ($call -like '*deploy_pc.ps1*' -and $call -like '*-Build*') {
-        Add-Content '.runtime/actions' 'PC_DEPLOY'
-        if ($env:NETWORK_TEST_CASE -in @('pc-failed','legacy-failed','legacy-missing-failed','legacy-malformed-failed','legacy-mismatched-failed')) { throw 'Simulated Docker build failure' }
-    }
     if ($FilePath -ne 'docker.exe') { return '' }
     if ($call -like '*--force-recreate*--no-deps*server*') {
         Add-Content '.runtime/actions' 'UDP_RECREATE'
@@ -521,18 +548,6 @@ exit $LASTEXITCODE
             self.assertFalse((root / '.talkback_token').exists())
             self.assertFalse((root / '.runtime/mutation.lock').exists())
             self.assertFalse((root / 'recordings/.maintenance.json').exists())
-
-    def test_run_all_uses_same_fresh_deployment(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            self.deployment_fixture(root)
-            source = (ROOT / 'run_all.ps1').read_text().replace('#Requires -RunAsAdministrator\n', '')
-            (root / 'run_all.ps1').write_text(source)
-            runner = root / 'run.ps1'
-            runner.write_text(runner.read_text().replace("'scripts/deploy.ps1') @args", "'run_all.ps1') -NoBrowser @args"))
-            result = self.run_deployment(root)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn('CAMERA_DEPLOY', (root / '.runtime/actions').read_text())
 
     def test_release_failure_keeps_marker_and_does_not_claim_success(self):
         with tempfile.TemporaryDirectory() as directory:

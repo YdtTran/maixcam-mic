@@ -6,8 +6,8 @@ with explicit 20 ms playback periods / 80 ms buffers and a 120-byte SCO MTU
 override. Playback uses raw PCM and feeds silence at 20 ms deadlines during
 packet gaps in an active session, avoiding repeated buffer starvation.
 TCP/video, independent PCMU return on UDP8004, and video-only
-recordings keep their existing paths. Camera deployment defaults to SCO duplex;
-explicit `-AudioProfile a2dp` selects the half-duplex fallback.
+recordings keep their existing paths. The current fresh-install uses SCO duplex.
+The manual trial below records the earlier experimental procedure.
 
 The MaixCAM BlueALSA 4.1.1 build lists only CVSD for HFP; mSBC is absent.
 The available PCM is S16_LE, 8000 Hz, mono. SCO permits simultaneous audio;
@@ -55,10 +55,10 @@ Bluetooth recommendation. It retains the controller's reported packet count.
 
 The shared [startup template](../maix/background_services.rc.local) now reads
 `AUDIO_PROFILE` from `/root/workercam.env`. Camera deployment with
-`deploy_maix.ps1 -AudioProfile sco` installs the default SCO settings;
-`-AudioProfile a2dp` selects the fallback. The separate experimental startup file was consolidated into this
-parameterized template. Apply a rebooting deployment only after the acceptance
-checks below pass. Save the actual original `/etc/rc.local` for rollback.
+the [single fresh-install command](../README.md) installs SCO settings and reboots
+the camera. The separate experimental startup file was consolidated into the
+parameterized template. Fresh installation resets application settings and has
+no application rollback; the manual trial's recovery notes below are historical.
 
 SCO startup prepares the powered controller and verifies MTU before launching
 any audio clients. Setting MTU while the controller is down is insufficient:

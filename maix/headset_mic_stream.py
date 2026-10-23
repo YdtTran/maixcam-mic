@@ -11,9 +11,9 @@ import time
 from pathlib import Path
 
 try:
-    from .bluetooth_control import SELECTION_PATH, MAC
+    from .bluetooth_control import SELECTION_PATH, MAC, read_capture_volume
 except ImportError:  # Run directly on MaixCAM.
-    from bluetooth_control import SELECTION_PATH, MAC
+    from bluetooth_control import SELECTION_PATH, MAC, read_capture_volume
 
 
 PAUSE_PATH = Path("/run/headset-mic-paused")
@@ -38,6 +38,14 @@ try:
     import audioop
 except ImportError:  # Python 3.13+.
     audioop = None
+
+
+def amplify_capture(frame, volume=100):
+    """Scale microphone volume; 100% keeps the 50% boost, 0% is silence."""
+    if audioop is not None and sys.byteorder == "little":
+        return audioop.mul(frame, 2, volume * 1.5 / 100)
+    samples = struct.unpack("<160h", frame)
+    return struct.pack("<160h", *(max(-32768, min(32767, sample * 3 * volume // 200)) for sample in samples))
 
 
 class RtpPcmUlawSender:
@@ -126,6 +134,7 @@ def publish_audio(target, selection_path=SELECTION_PATH, pause_path=PAUSE_PATH, 
     next_frame_at = time.monotonic()
     active_mac = None
     next_selection_check = 0.0
+    capture_volume = 100
     try:
         if sender is None:
             publisher = subprocess.Popen(publisher_command(target, transport=transport, rtsp_port=rtsp_port),
@@ -135,6 +144,11 @@ def publish_audio(target, selection_path=SELECTION_PATH, pause_path=PAUSE_PATH, 
             now = time.monotonic()
             if now >= next_selection_check:
                 next_selection_check = now + 0.5
+                try:
+                    capture_volume = read_capture_volume(selection_path)
+                except (OSError, ValueError) as error:
+                    capture_volume = 0
+                    print(f"Microphone volume unavailable: {error}; sending silence", flush=True)
                 current_mac = selected_mac(selection_path)
                 if current_mac != active_mac:
                     stop_process(capture)
@@ -181,7 +195,7 @@ def publish_audio(target, selection_path=SELECTION_PATH, pause_path=PAUSE_PATH, 
                     except BlockingIOError:
                         pass
                     if len(pending) >= FRAME_BYTES:
-                        frame = bytes(pending[:FRAME_BYTES])
+                        frame = amplify_capture(bytes(pending[:FRAME_BYTES]), capture_volume)
                         del pending[:FRAME_BYTES]
 
             try:

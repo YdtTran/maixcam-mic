@@ -3,8 +3,9 @@
 ## Current deployment
 
 The accepted media route is TCP video with independent microphone return on
-UDP 8004. Customer deployment uses `./run_all.ps1` and one `compose.yaml` with
-published ports. Stop through `./stop_docker_pc.ps1` after recording finishes.
+UDP 8004. Customer deployment uses `scripts/deploy.ps1 -WifiSsid <SSID> -HeadsetMac <MAC>` and one `compose.yaml` with
+published ports. Stop recording in the operator UI and wait for finalization
+before closing Docker Desktop.
 See the [README](../README.md) and [Docker guide](docker-run-guide.md).
 
 The trials below document earlier investigations. Their diagnostic tools remain
@@ -84,7 +85,7 @@ the launcher daemon is active race hardware MMF/ISP pipeline teardown (`cvi-vi`,
 `cvi-vpss`, `/tmp/isp_fifo`) and cause `camera read timeout` / `camera read failed`.
 
 Safe camera video recovery requires a clean camera reboot:
-- Automated: `.\scripts\deploy.ps1` or `.\deploy_maix.ps1 -Reboot`
+- Automated: use the [single fresh-install command](../README.md).
 - Manual: verify recording is stopped, then issue `/sbin/reboot` on the camera
 
 On the PC side, deployment verifies that Windows host UDP return-audio listeners

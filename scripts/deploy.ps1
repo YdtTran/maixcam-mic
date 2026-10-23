@@ -14,8 +14,7 @@ param(
     [string]$KeyPath,
     [Security.SecureString]$Password,
     [Security.SecureString]$WifiPassword,
-    [string]$CredentialPath,
-    [ValidateRange(60, 3600)][int]$DeploymentTimeoutSeconds = 900
+    [string]$CredentialPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -53,13 +52,6 @@ for entry in glob.glob('/sys/class/net/*'):
 print(json.dumps(dict(model=model, wifi=interfaces)))
 PY
 '@
-
-function Invoke-ProjectScript {
-    param([string]$Name, [string[]]$Arguments = @())
-    $shell = (Get-Process -Id $PID).Path
-    Invoke-NetworkProcess $shell (@('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-        '-File', (Join-Path $root $Name)) + $Arguments) -TimeoutSeconds $DeploymentTimeoutSeconds -StreamOutput | Out-Null
-}
 
 function Test-Application {
     param([string]$CameraIP, [string]$UsbIP, [string]$LaptopIP, [string]$EarbudsMac, [switch]$PreviousRelease)
@@ -127,7 +119,7 @@ PY
     if (-not $PreviousRelease -and $env:OS -eq 'Windows_NT') {
         if (-not (Test-HostUdpListeners -Ports @(8004, 8005))) {
             Write-Host 'Windows host UDP listener 8004/8005 missing; checking recording status and recreating container...'
-            Invoke-ProjectScript 'stop_docker_pc.ps1' @('-CheckOnly')
+            Stop-PcRuntime -CheckOnly
             Invoke-NetworkProcess docker.exe @('compose', 'up', '-d', '--force-recreate', '--no-deps', 'server') | Out-Null
             if (-not (Test-HostUdpListeners -Ports @(8004, 8005))) {
                 throw 'Windows host UDP listener 8004/8005 remains missing after container recreation.'
@@ -205,6 +197,7 @@ try {
     $earbuds = $HeadsetMac
     $audioProfile = 'sco'
     if ((Invoke-NetworkProcess docker.exe @('info', '--format', '{{.OSType}}')) -ne 'linux') { throw 'Start Docker Desktop with Linux containers.' }
+    Assert-DockerNetworkRoute $laptop.Address
     Write-Host "Required Wi-Fi SSID: $WifiSsid; MaixCAM Wi-Fi MAC: $wifiMac"
     if ($needsWifiSwitch) {
         if ($DryRun) {
@@ -220,6 +213,7 @@ try {
         $wifiIP = [string]$joined.ip
     }
     $laptop = Select-LaptopWifi $interfaces $wifiIP $laptop.Index
+    Assert-DockerNetworkRoute $wifiIP
     # Reuse the verified USB host identity for Wi-Fi, rather than trusting an arbitrary Wi-Fi responder.
     $wifiContext = @{ Options = @($context.Options) + @('-b', $laptop.Address, '-o', "HostKeyAlias=$usbIP"); Environment = $context.Environment }
     $wifiIdentity = Invoke-MaixSsh $wifiContext $wifiIP $inventoryCommand | ConvertFrom-Json
@@ -254,9 +248,9 @@ try {
     if ($KeyPath) { $cameraOptions.KeyPath = $KeyPath }
     if ($Password) { $cameraOptions.Password = $Password }
     if ($WifiPassword) { $cameraOptions.WifiPassword = $WifiPassword }
-    & (Join-Path $root 'deploy_maix.ps1') @cameraOptions
+    Install-MaixCamera @cameraOptions
     Write-Host 'Building and starting laptop services without cache...'
-    Invoke-ProjectScript 'deploy_pc.ps1' @('-Build', '-Recreate', '-NoCache')
+    Install-PcRuntime -Build -Recreate -NoCache
     $exitCode = 5
     $deadline = [datetime]::UtcNow.AddSeconds(90)
     $returnRecoveryUsed = $false
@@ -267,8 +261,8 @@ try {
             if (-not $returnRecoveryUsed -and $_.Exception.Message -like 'Headset return verification failed:*') {
                 $returnRecoveryUsed = $true
                 Write-Host 'Headset return unavailable. Performing one recording-safe PC stop/start to refresh Docker UDP forwarding...'
-                Invoke-ProjectScript 'stop_docker_pc.ps1'
-                Invoke-ProjectScript 'deploy_pc.ps1'
+                Stop-PcRuntime
+                Install-PcRuntime
                 $deadline = [datetime]::UtcNow.AddSeconds(90)
                 continue
             }

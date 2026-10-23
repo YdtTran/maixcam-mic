@@ -392,7 +392,7 @@ def make_handler(manager, html_path=APP_DIR / "operator_test.html", talkback=Non
                 return self._json(200, {"available": talkback is not None, "transport": "webrtc",
                                         "protocol": "TB3",
                                         "error": talkback.error if talkback else None})
-            if route in ("/api/bluetooth/status", "/api/bluetooth/volume"):
+            if route in ("/api/bluetooth/status", "/api/bluetooth/capture-volume"):
                 if bluetooth is None:
                     return self._json(503, {"error": "Bluetooth control is not configured"})
                 code, payload = bluetooth.request(route.rsplit("/", 1)[1])
@@ -467,20 +467,20 @@ def make_handler(manager, html_path=APP_DIR / "operator_test.html", talkback=Non
                     return self._json(400, {"error": "talkback session is required"})
                 talkback.stop(session)
                 return self._json(200, {"stopped": True})
-            if route in ("/api/bluetooth/scan", "/api/bluetooth/select", "/api/bluetooth/volume"):
+            if route in ("/api/bluetooth/scan", "/api/bluetooth/select", "/api/bluetooth/capture-volume"):
                 if bluetooth is None:
                     return self._json(503, {"error": "Bluetooth control is not configured"})
                 mac = None
-                if route.endswith("/select") or route.endswith("/volume"):
+                if route.endswith("/select") or route.endswith("/capture-volume"):
                     try:
                         size = int(self.headers.get("Content-Length", "0"))
                         if size < 1 or size > 256:
                             raise ValueError("invalid selection body")
                         body = json.loads(self.rfile.read(size))
-                        if route.endswith("/volume"):
+                        if route.endswith("/capture-volume"):
                             if not isinstance(body, dict) or set(body) != {"volume"} or type(body["volume"]) is not int or not 0 <= body["volume"] <= 100:
                                 raise ValueError("invalid volume")
-                            code, payload = bluetooth.request("volume", volume=body["volume"])
+                            code, payload = bluetooth.request(route.rsplit("/", 1)[1], volume=body["volume"])
                             return self._json(code, payload)
                         mac = body.get("mac")
                     except (ValueError, AttributeError):

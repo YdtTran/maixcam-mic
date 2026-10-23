@@ -8,6 +8,20 @@ The new path is SCO capture → PCM16/8 kHz/mono → G.711 mu-law RTP
 The optional [multistream recorder](multistream-recording.md) consumes the
 independent audio paths without changing live video.
 
+Live Workers Actions provides **Earbud microphone volume**. Apply it to scale the camera's transmitted PCM from
+0–100%; 0 sends digital silence, 100 retains the 1.5 amplitude boost (about
++3.5 dB). `/api/bluetooth/capture-volume` proxies to the camera's
+`/bluetooth/capture-volume`, validating an integer from 0 to 100.
+The camera atomically saves `/root/.bluetooth_device.capture-volume`, reread by
+the sender every 0.5 seconds; no audio process restart is needed. Missing state
+defaults to 100; unreadable/invalid state sends silence until corrected. Normal
+restarts retain the setting; hard-fresh reinstall resets it to 100.
+
+Scaling happens before either RTP or RTSP encoding. Samples saturate at signed 16-bit limits;
+loud input can clip, and background noise is amplified too. This affects live
+listening and new worker-audio recordings. Talk from PC to MaixCAM retains
+normal delivery; the retired playback-volume API and UI have been removed.
+
 Camera direct UDP mode (`headset_mic_stream.py --rtp-port 8004`) now encodes
 S16LE capture in-process and sends 12-byte RTP headers plus 160-byte PCMU
 payloads every 20 ms. It starts no camera FFmpeg publisher; `arecord` remains
@@ -29,7 +43,8 @@ redeployment verification pending**. No hardware resource savings or audible
 acceptance are established by local tests.
 
 The receiver is opt-in in `app.py` with `--return-audio-port 8004`.
-`compose.yaml` enables independent return on UDP 8004; use `deploy_pc.ps1` for PC deployment.
+`compose.yaml` enables independent return on UDP 8004; use the
+[single fresh-install command](../README.md) to deploy both devices.
 Use video mode with this option. The older `--headset-rtp-port` option is
 for the combined publisher and does not enable this independent service.
 Do not run the RTSP camera `/headsetmic` publisher alongside this RTP receiver:
@@ -194,11 +209,10 @@ used together. To roll back, stop those two processes and restart their saved
 commands without these options; the connector restores A2DP output and talkback
 restores capture pause. No camera video service should be stopped.
 
-On Windows, stop recording in the UI, then:
+On Windows, finish recordings and use the [fresh-install command](../README.md)
+if redeployment is needed. After successful setup, inspect streams with:
 
 ```powershell
-.\stop_docker_pc.ps1
-.\deploy_pc.ps1 -Build
 docker compose exec server cat .runtime/headset-return.ffmpeg.log
 docker compose exec server ffprobe -v error -rtsp_transport tcp -show_streams rtsp://127.0.0.1:8554/headsetmic
 docker compose exec server ffprobe -v error -rtsp_transport tcp -show_streams rtsp://127.0.0.1:8554/maix01

@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class BootTuningTests(unittest.TestCase):
     def test_installer_requires_matching_camera_ssid_and_mac(self):
-        source = (ROOT / 'deploy_maix.ps1').read_text()
+        source = (ROOT / 'scripts/NetworkDeployment.psm1').read_text()
         check = source.split(". ./workercam.env\npython3 - <<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -38,8 +38,12 @@ class BootTuningTests(unittest.TestCase):
                 exec(compile(check, '<installer wifi check>', 'exec'), {})
 
     def test_deployment_entry_points_require_administrator(self):
-        for name in ('deploy_pc.ps1', 'deploy_maix.ps1', 'run_all.ps1', 'scripts/deploy.ps1'):
-            self.assertEqual((ROOT / name).read_text().splitlines()[0], '#Requires -RunAsAdministrator')
+        scripts = sorted(str(path.relative_to(ROOT)).replace('\\', '/')
+                         for path in ROOT.glob('*.ps1'))
+        scripts += sorted(str(path.relative_to(ROOT)).replace('\\', '/')
+                          for path in (ROOT / 'scripts').glob('*.ps1'))
+        self.assertEqual(scripts, ['scripts/deploy.ps1'])
+        self.assertEqual((ROOT / scripts[0]).read_text().splitlines()[0], '#Requires -RunAsAdministrator')
 
     def test_tuning_precedes_bluetooth_and_is_best_effort(self):
         script = (ROOT / "maix/background_services.rc.local").read_text()
@@ -77,15 +81,19 @@ class DeploymentScriptTests(unittest.TestCase):
     def run_helper(self, name, case="ready", arguments=""):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for source in ROOT.glob("*.ps1"):
-                # Only isolated copies bypass elevation; every external operation is mocked.
-                (root / source.name).write_text(source.read_text().replace('#Requires -RunAsAdministrator\n', ''))
+            helpers = {'deploy_maix.ps1': 'Install-MaixCamera',
+                       'deploy_pc.ps1': 'Install-PcRuntime', 'stop_docker_pc.ps1': 'Stop-PcRuntime'}
+            for filename, function in helpers.items():
+                (root / filename).write_text(
+                    "Import-Module (Join-Path $PSScriptRoot 'scripts/NetworkDeployment.psm1') -Force -DisableNameChecking\n"
+                    + function + ' @args\n')
             (root / "scripts").mkdir()
             shutil.copy2(ROOT / "scripts/NetworkDeployment.psm1", root / "scripts/NetworkDeployment.psm1")
             with (root / "scripts/NetworkDeployment.psm1").open("a") as module:
                 module.write(r'''
 function Invoke-NetworkProcess {
     param($FilePath, $Arguments, $TimeoutSeconds, $InputText, $Environment)
+    if ($FilePath -eq 'docker.exe') { return '' }
     if ($FilePath -eq 'ssh-keygen.exe') { return '256 SHA256:test key' }
     if ($FilePath -eq 'ssh.exe') {
         if ($InputText -like 'set -eu*') {
@@ -180,6 +188,7 @@ function docker {
             'finalizing' { return '{"recording":false,"finalizing":true}' }
             'status-failed' { $global:LASTEXITCODE = 1; return }
             'invalid-status' { return '{}' }
+            'no-finalizing' { return '{"recording":false}' }
             default {
                 if (($env:DEPLOY_TEST_CASE -eq 'legacy' -and -not $global:upgraded) -or $env:DEPLOY_TEST_CASE -eq 'legacy-unsupported') { return '{"recording":false,"finalizing":false}' }
                 $marker = Join-Path $env:DEPLOY_TEST_ROOT 'recordings/.maintenance.json'
@@ -322,6 +331,11 @@ try {
         code, output, _ = self.run_helper("stop_docker_pc.ps1", arguments="-CheckOnly")
         self.assertEqual(code, 0, output)
         self.assertNotIn("DOCKER_STOP_SERVER", output)
+
+    def test_stop_check_accepts_idle_status_without_optional_finalizing(self):
+        code, output, _ = self.run_helper('stop_docker_pc.ps1', 'no-finalizing', '-CheckOnly')
+        self.assertEqual(code, 0, output)
+        self.assertNotIn('DOCKER_STOP_SERVER', output)
 
     def test_legacy_combined_docker_settings_are_rejected(self):
         code, output, _ = self.run_helper("deploy_pc.ps1", "wrong-mode")
